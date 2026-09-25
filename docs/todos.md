@@ -44,10 +44,10 @@ Goal: FastAPI process that fails fast on missing config and can talk to Postgres
 
 Goal: product tables exist in Supabase. Do **not** create them in the dashboard.
 
-- [ ] `alembic init`; `env.py` imports SQLAlchemy metadata and uses direct `DATABASE_URL`
-- [X] SQLAlchemy models: `users`, `chat_threads`, `chat_messages`, `message_citations`, `source_documents`, `document_chunks`
-- [ ] Reviewed migration with explicit ops: `vector` extension, `vector(1536)`, generated `tsvector`, HNSW, GIN, RLS + policies, grants
-- [ ] `uv run alembic upgrade head` against hosted Supabase
+- [X] `alembic init`; `env.py` imports SQLAlchemy metadata and uses direct `DATABASE_URL` (normalizes `postgresql` → `postgresql+psycopg`, single source via `app.config.settings`)
+- [X] SQLAlchemy models (one file per model in `app/database/models/`): `users`, `chat_threads`, `chat_messages`, `message_citations`, `source_documents`, `document_chunks`
+- [X] Reviewed migration with explicit ops: `vector` extension, `vector(1536)`, generated `tsvector`, HNSW on embedding (cosine), GIN on search_vector; remaining (RLS + policies, grants) deferred until API auth is wired
+- [X] `uv run alembic upgrade head` against hosted Supabase — verified applied; alternatively use `uv run alembic stamp head` if tables already exist
 
 --- 
 

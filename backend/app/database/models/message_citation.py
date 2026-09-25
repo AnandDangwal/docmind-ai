@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, Text, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.models.base import Base
+
+if TYPE_CHECKING:
+    from app.database.models.chat_message import ChatMessage
+    from app.database.models.document_chunk import DocumentChunk
 
 
 class MessageCitation(Base):
@@ -34,5 +39,5 @@ class MessageCitation(Base):
         nullable=False,
     )
 
-    message: Mapped["ChatMessage"] = relationship(back_populates="citations")
-    chunk: Mapped["DocumentChunk | None"] = relationship(back_populates="citations")
+    message: Mapped[ChatMessage] = relationship(back_populates="citations")
+    chunk: Mapped[DocumentChunk | None] = relationship(back_populates="citations")

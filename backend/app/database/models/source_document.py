@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Date,
@@ -17,6 +18,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.models.base import Base
+
+if TYPE_CHECKING:
+    from app.database.models.document_chunk import DocumentChunk
 
 
 class SourceDocument(Base):
@@ -43,4 +47,4 @@ class SourceDocument(Base):
         nullable=False,
     )
 
-    chunks: Mapped[list["DocumentChunk"]] = relationship(back_populates="document")
+    chunks: Mapped[list[DocumentChunk]] = relationship(back_populates="document")

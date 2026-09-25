@@ -1,25 +1,27 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from typing import TYPE_CHECKING
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Computed,
-    DateTime,
     ForeignKey,
     Integer,
     String,
     Text,
     UniqueConstraint,
     Uuid,
-    func,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.database.models.base import Base, EMBEDDING_DIMENSIONS
+from app.database.models.base import EMBEDDING_DIMENSIONS, Base
+
+if TYPE_CHECKING:
+    from app.database.models.message_citation import MessageCitation
+    from app.database.models.source_document import SourceDocument
 
 
 class DocumentChunk(Base):
@@ -60,5 +62,5 @@ class DocumentChunk(Base):
         server_default=text("'{}'::jsonb"),
     )
 
-    document: Mapped["SourceDocument"] = relationship(back_populates="chunks")
-    citations: Mapped[list["MessageCitation"]] = relationship(back_populates="chunk")
+    document: Mapped[SourceDocument] = relationship(back_populates="chunks")
+    citations: Mapped[list[MessageCitation]] = relationship(back_populates="chunk")

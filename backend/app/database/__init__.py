@@ -1,25 +1,25 @@
 from app.database.models import (
+    EMBEDDING_DIMENSIONS,
+    NAMING_CONVENTION,
     Base,
     ChatMessage,
     ChatThread,
     DocumentChunk,
-    EMBEDDING_DIMENSIONS,
     MessageCitation,
     MessageRole,
-    NAMING_CONVENTION,
     SourceDocument,
     User,
 )
 
 __all__ = [
-    "Base",
     "EMBEDDING_DIMENSIONS",
-    "MessageRole",
     "NAMING_CONVENTION",
-    "User",
-    "ChatThread",
+    "Base",
     "ChatMessage",
-    "SourceDocument",
+    "ChatThread",
     "DocumentChunk",
     "MessageCitation",
+    "MessageRole",
+    "SourceDocument",
+    "User",
 ]

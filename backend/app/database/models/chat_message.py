@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     CheckConstraint,
@@ -16,6 +17,10 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.models.base import Base, MessageRole
+
+if TYPE_CHECKING:
+    from app.database.models.chat_thread import ChatThread
+    from app.database.models.message_citation import MessageCitation
 
 
 class ChatMessage(Base):
@@ -43,5 +48,5 @@ class ChatMessage(Base):
         nullable=False,
     )
 
-    thread: Mapped["ChatThread"] = relationship(back_populates="messages")
-    citations: Mapped[list["MessageCitation"]] = relationship(back_populates="message")
+    thread: Mapped[ChatThread] = relationship(back_populates="messages")
+    citations: Mapped[list[MessageCitation]] = relationship(back_populates="message")

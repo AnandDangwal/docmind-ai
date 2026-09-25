@@ -7,7 +7,7 @@ Create Date: 2026-09-24 14:26:35.692313+00:00
 """
 from collections.abc import Sequence
 
-import pgvector.sqlalchemy  # noqa: F401  — registers VECTOR type with SQLAlchemy
+import pgvector.sqlalchemy
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 

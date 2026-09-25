@@ -1,13 +1,11 @@
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config, pool, make_url
+import pgvector.sqlalchemy  # noqa: F401  — registers Vector type with SQLAlchemy
+from sqlalchemy import engine_from_config, make_url, pool
 
 from alembic import context
-
 from app.config import settings
 from app.database import Base
-
-import pgvector.sqlalchemy  # noqa: F401  — registers Vector type with SQLAlchemy
 
 config = context.config
 

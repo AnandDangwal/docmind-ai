@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.models.base import Base
+
+if TYPE_CHECKING:
+    from app.database.models.chat_thread import ChatThread
 
 
 class User(Base):
@@ -21,4 +25,4 @@ class User(Base):
         nullable=False,
     )
 
-    threads: Mapped[list["ChatThread"]] = relationship(back_populates="owner")
+    threads: Mapped[list[ChatThread]] = relationship(back_populates="owner")

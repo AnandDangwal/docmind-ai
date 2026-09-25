@@ -1,8 +1,8 @@
 from app.database.models.base import (
-    Base,
     EMBEDDING_DIMENSIONS,
-    MessageRole,
     NAMING_CONVENTION,
+    Base,
+    MessageRole,
 )
 from app.database.models.chat_message import ChatMessage
 from app.database.models.chat_thread import ChatThread
@@ -12,14 +12,14 @@ from app.database.models.source_document import SourceDocument
 from app.database.models.user import User
 
 __all__ = [
-    "Base",
     "EMBEDDING_DIMENSIONS",
-    "MessageRole",
     "NAMING_CONVENTION",
-    "User",
-    "ChatThread",
+    "Base",
     "ChatMessage",
-    "SourceDocument",
+    "ChatThread",
     "DocumentChunk",
     "MessageCitation",
+    "MessageRole",
+    "SourceDocument",
+    "User",
 ]
