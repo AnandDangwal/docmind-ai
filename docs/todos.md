@@ -69,9 +69,11 @@ Goal: analyst can open the SPA and log in with email. Still no real answers.
 - [X] Vite React-TS, Tailwind, shadcn, React Router (`pnpm` only)
 - [X] `src/lib/env.ts` validates `VITE_API_BASE_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
 - [X] `src/lib/supabase.ts` browser client (anon key only)
-- [ ] Email sign-in / sign-up pages; session in the shared client
-- [ ] Protected chat route; unauthenticated users bounce to login
+- [X] Email sign-in / sign-up pages; session in the shared client
+- [X] Protected chat route; unauthenticated users bounce to login
 - [X] `src/lib/http.ts` + `src/lib/api.ts` — base URL, bearer injection, timeouts, typed errors (`isNetworkError`)
+- [X] Verify sign-up → sign-in loop end-to-end: `pnpm dev`, create an account with a real email, confirm via the Supabase inbox link, sign in, land on `/`, sign out returns to `/login`, direct-hitting `/` while signed out redirects to `/login`
+
 
 ---
 
@@ -79,12 +81,20 @@ Goal: analyst can open the SPA and log in with email. Still no real answers.
 
 Goal: end-to-end request path before ingestion or the real model. Proves streaming + persistence.
 
-- [ ] FastAPI thread CRUD: create thread, list own threads, load message history
-- [ ] `POST /chat/stream` accepts AI SDK-shaped `{ threadId, messages }`
-- [ ] Stub stream (fixed text) in AI SDK event format
-- [ ] Persist user + assistant messages after a successful stub turn
-- [ ] Frontend: AI SDK `useChat` + `DefaultChatTransport` pointing at FastAPI (not a Vite route)
-- [ ] Thread list + new chat in the UI
+- [X] FastAPI thread CRUD: create thread, list own threads, load message history
+  - [X] 403 on cross-user thread access (`require_thread_access` from Phase 3 exercised on real routes)
+  - [X] 404 for a thread that does not exist
+- [X] `POST /chat/stream` accepts AI SDK-shaped `{ threadId, messages }`
+  - [X] 422 on a malformed request body (typed Pydantic request model)
+  - [X] `app/chat/messages.py` — convert AI SDK UI messages to/from internal message types
+- [X] Stub stream (fixed text) in AI SDK event format
+  - [X] `app/chat/streaming.py` — emits AI SDK-compatible streaming events
+- [X] Persist user + assistant messages after a successful stub turn
+- [X] Frontend: AI SDK `useChat` + `DefaultChatTransport` pointing at FastAPI (not a Vite route)
+  - [X] Install `ai` / `@ai-sdk/react` (`pnpm add`)
+  - [X] `src/lib/api.ts` — create thread, list threads, fetch message history
+- [X] Thread list + new chat in the UI
+  - [X] Route for an individual thread (e.g. `/threads/:id`)
 
 ---
 

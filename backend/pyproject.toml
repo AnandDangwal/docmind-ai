@@ -25,6 +25,9 @@ dependencies = [
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
 
+[tool.pytest.ini_options]
+markers = ["integration: requires live DB/Supabase credentials"]
+
 [tool.uv]
 add-bounds = "exact"
 exclude-newer = "7 days"

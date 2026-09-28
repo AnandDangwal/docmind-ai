@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.chat import router as chat_router
+from app.auth.router import router as auth_router
 from app.config import settings
 
 app = FastAPI()
@@ -13,9 +15,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router)
+app.include_router(chat_router)
+
 
 @app.get("/health")
-async def health() -> dict[str, str]: 
+async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 

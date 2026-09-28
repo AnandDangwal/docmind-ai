@@ -1,11 +1,12 @@
 from logging.config import fileConfig
 
 import pgvector.sqlalchemy  # noqa: F401  — registers Vector type with SQLAlchemy
-from sqlalchemy import engine_from_config, make_url, pool
+from sqlalchemy import engine_from_config, pool
 
 from alembic import context
 from app.config import settings
 from app.database import Base
+from app.database.session import normalize_database_url
 
 config = context.config
 
@@ -14,15 +15,7 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-
-def _normalize_url(raw_url: str) -> str:
-    url = make_url(raw_url)
-    if url.drivername == "postgresql":
-        url = url.set(drivername="postgresql+psycopg")
-    return url.render_as_string(hide_password=False)
-
-
-db_url = _normalize_url(settings.database_url.get_secret_value())
+db_url = normalize_database_url(settings.database_url.get_secret_value())
 config.set_main_option("sqlalchemy.url", db_url)
 
 
