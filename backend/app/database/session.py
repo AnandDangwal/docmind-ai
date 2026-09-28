@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import asyncio
+import sys
 from collections.abc import AsyncIterator
 
 from sqlalchemy import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import settings
+
+if sys.platform == "win32":
+    # psycopg's async driver requires the selector loop; Windows defaults to
+    # the proactor loop, which raises InterfaceError on connect.
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 def normalize_database_url(raw_url: str) -> str:
