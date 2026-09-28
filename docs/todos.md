@@ -35,7 +35,7 @@ Goal: FastAPI process that fails fast on missing config and can talk to Postgres
 - [X] `uv sync` / add declared backend deps (FastAPI, uvicorn, pydantic-settings, httpx, structlog, openai, supabase, pydantic-ai, sqlalchemy, alembic, psycopg, pgvector)
 - [X] `app/config.py` as the only env source (`SUPABASE_*`, `DATABASE_URL`, `OPENAI_API_KEY`, `ALLOWED_ORIGINS`, embedding model + dimensions)
 - [X] `app/main.py` + health route; CORS from `ALLOWED_ORIGINS`
-- [ ] `app/database/supabase.py` (user-scoped vs service-role clients)
+- [X] `app/database/supabase.py` (user-scoped vs service-role clients)
 - [X] `uv run uvicorn app.main:app --reload` boots locally
 
 ---
@@ -55,10 +55,10 @@ Goal: product tables exist in Supabase. Do **not** create them in the dashboard.
 
 Goal: no retrieval or LLM work without a verified Supabase JWT.
 
-- [ ] `app/auth/dependencies.py` — `Authorization: Bearer`, verify via Supabase Auth, `get_current_user`
-- [ ] Reject missing/expired/invalid tokens with `401` before any privileged work
-- [ ] Persist chats/messages always attached to authenticated `user_id`
-- [ ] `403` if a user hits another user’s thread
+- [X] `app/auth/dependencies.py` — `Authorization: Bearer`, verify via Supabase Auth, `get_current_user`
+- [X] Reject missing/expired/invalid tokens with `401` before any privileged work
+- [X] Persist chats/messages always attached to authenticated `user_id`
+- [X] `403` if a user hits another user’s thread
 
 ---
 
@@ -66,12 +66,12 @@ Goal: no retrieval or LLM work without a verified Supabase JWT.
 
 Goal: analyst can open the SPA and log in with email. Still no real answers.
 
-- [ ] Vite React-TS, Tailwind, shadcn, React Router (`pnpm` only)
-- [ ] `src/lib/env.ts` validates `VITE_API_BASE_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
-- [ ] `src/lib/supabase.ts` browser client (anon key only)
+- [X] Vite React-TS, Tailwind, shadcn, React Router (`pnpm` only)
+- [X] `src/lib/env.ts` validates `VITE_API_BASE_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
+- [X] `src/lib/supabase.ts` browser client (anon key only)
 - [ ] Email sign-in / sign-up pages; session in the shared client
 - [ ] Protected chat route; unauthenticated users bounce to login
-- [ ] `src/lib/http.ts` + `src/lib/api.ts` — base URL, bearer injection, timeouts, typed errors (`isNetworkError`)
+- [X] `src/lib/http.ts` + `src/lib/api.ts` — base URL, bearer injection, timeouts, typed errors (`isNetworkError`)
 
 ---
 
