@@ -22,8 +22,18 @@ export function ThreadLoader({ threadId }: { threadId: string }) {
     }
   }, [threadId])
 
-  if (error) return <div className="p-6 text-sm text-destructive">{error}</div>
-  if (!initialMessages) return <div className="p-6 text-sm text-muted-foreground">Loading…</div>
+  if (error) {
+    return (
+      <div className="flex flex-1 items-center justify-center text-sm text-destructive">{error}</div>
+    )
+  }
+  if (!initialMessages) {
+    return (
+      <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+        Loading…
+      </div>
+    )
+  }
 
   return <ThreadChat threadId={threadId} initialMessages={initialMessages} />
 }

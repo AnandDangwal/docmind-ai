@@ -22,7 +22,7 @@ export function ThreadChat({
   const disabled = status === "submitted" || status === "streaming"
 
   return (
-    <div className="flex h-svh flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <MessageList messages={messages} />
       <MessageInput disabled={disabled} onSend={(text) => sendMessage({ text })} />
     </div>

@@ -20,7 +20,13 @@ def get_service_role_client() -> Client:
 
 
 def create_user_client(access_token: str) -> Client:
-    return create_client(settings.supabase_url, access_token)
+    # `create_client`'s key becomes the `apiKey` header, which the Supabase
+    # gateway validates against the project's actual anon/service key — a
+    # user JWT there is rejected. Use the anon key for `apiKey` and layer the
+    # user's JWT onto postgrest's Authorization header so RLS still sees it.
+    client = create_client(settings.supabase_url, settings.supabase_anon_key.get_secret_value())
+    client.postgrest.auth(access_token)
+    return client
 
 
 async def verify_jwt(access_token: str) -> dict:
