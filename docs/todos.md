@@ -1,203 +1,198 @@
-# Implementation checklist
+# Document Copilot — implementation checklist
 
-Work **backend-first, then a thin frontend, then retrieval, then the LLM, then polish**. The frontend is a thin authenticated chat client. Trust (citations, grounding, “I don’t know”) lives in FastAPI. Building the UI before there is an API, schema, and corpus just means you invent fake contracts.
+Work top to bottom. Each phase unlocks the next. Check items off as you go.
 
-**Why this order**
+## Where to start: backend, frontend, or both?
 
-1. **Accounts + env** — nothing else boots without Supabase and OpenAI keys.
-2. **Backend scaffold + schema** — the product is retrieval + grounded answers; tables and auth on the API are the contract.
-3. **Frontend shell** — sign-in and a stub chat against that contract, so you can see the loop early.
-4. **Ingestion** — no corpus means nothing to retrieve.
-5. **Hybrid retrieval + agent + grounding** — this is the product.
-6. **Citation UI + errors** — the brief’s trust bar.
-7. **Deploy + analyst-shaped eval** — definition of done.
+**Start with foundation, then backend-led vertical slices.**
 
-Tick boxes as you go. Architecture: [architecture.md](architecture.md). Brief: [client-brief.md](client-brief.md).
+| Order | Why |
+| ----- | --- |
+| 1. Supabase + sample data | Everything persists here; you need a project and a corpus to test against. |
+| 2. Backend schema + migrations | Auth, chat, retrieval, and citations all depend on the data model. |
+| 3. Thin vertical slices | Wire auth, then a stubbed chat stream, then real RAG — each slice touches frontend + backend together. |
+| 4. Frontend in parallel (lightly) | Scaffold the SPA early, but don't build citation UI or chat polish until the backend can return real grounded answers. |
 
----
-
-## Phase 0 — Accounts and local env
-
-- [X] Create hosted Supabase project ([guides/supabase-setup.md](guides/supabase-setup.md))
-- [X] Collect project URL, anon key, service-role key, direct `DATABASE_URL` (session/direct, not pooler)
-- [X] Enable email auth only; for local dev, disable email confirmation if you have no inbox
-- [X] Create an OpenAI API key
-- [X] Fill `backend/.env` from `backend/.env.example` (never commit secrets)
-- [X] Fill `frontend/.env` from `frontend/.env.example`
-- [X] Confirm local tools: Python 3.12+, uv, Node 20+, pnpm
+The critical path is **data model → ingestion → retrieval → LLM → citations**. The frontend is mostly a streaming chat shell with auth and citation display — it shouldn't get far ahead of working APIs.
 
 ---
 
-## Phase 1 — Backend scaffold (do this first)
+## Phase 0 — Prerequisites & foundation
 
-Goal: FastAPI process that fails fast on missing config and can talk to Postgres.
-
-- [X] `uv sync` / add declared backend deps (FastAPI, uvicorn, pydantic-settings, httpx, structlog, openai, supabase, pydantic-ai, sqlalchemy, alembic, psycopg, pgvector)
-- [X] `app/config.py` as the only env source (`SUPABASE_*`, `DATABASE_URL`, `OPENAI_API_KEY`, `ALLOWED_ORIGINS`, embedding model + dimensions)
-- [X] `app/main.py` + health route; CORS from `ALLOWED_ORIGINS`
-- [X] `app/database/supabase.py` (user-scoped vs service-role clients)
-- [X] `uv run uvicorn app.main:app --reload` boots locally
-
----
-
-## Phase 2 — Schema (Alembic owns tables)
-
-Goal: product tables exist in Supabase. Do **not** create them in the dashboard.
-
-- [X] `alembic init`; `env.py` imports SQLAlchemy metadata and uses direct `DATABASE_URL` (normalizes `postgresql` → `postgresql+psycopg`, single source via `app.config.settings`)
-- [X] SQLAlchemy models (one file per model in `app/database/models/`): `users`, `chat_threads`, `chat_messages`, `message_citations`, `source_documents`, `document_chunks`
-- [X] Reviewed migration with explicit ops: `vector` extension, `vector(1536)`, generated `tsvector`, HNSW on embedding (cosine), GIN on search_vector; remaining (RLS + policies, grants) deferred until API auth is wired
-- [X] `uv run alembic upgrade head` against hosted Supabase — verified applied; alternatively use `uv run alembic stamp head` if tables already exist
-
---- 
-
-## Phase 3 — Auth on the API
-
-Goal: no retrieval or LLM work without a verified Supabase JWT.
-
-- [X] `app/auth/dependencies.py` — `Authorization: Bearer`, verify via Supabase Auth, `get_current_user`
-- [X] Reject missing/expired/invalid tokens with `401` before any privileged work
-- [X] Persist chats/messages always attached to authenticated `user_id`
-- [X] `403` if a user hits another user’s thread
+- [x] Install toolchain: Python 3.12+, `uv`, Node 20+, `pnpm` (see [README](../README.md))
+- [x] Create Supabase project and collect credentials ([supabase-setup](guides/supabase-setup.md))
+- [x] Create OpenAI API key (needed from Phase 6 onward)
+- [x] Set `USER_AGENT` in `data/download.py` and download sample 10-K corpus:
+  ```bash
+  uv run data/download.py
+  ```
+- [x] Confirm `data/downloads/manifest.json` lists AAPL, MSFT, NVDA, AMZN, GOOGL filings (2021–2025)
 
 ---
 
-## Phase 4 — Frontend scaffold + sign-in
+## Phase 1 — Backend scaffold & database
 
-Goal: analyst can open the SPA and log in with email. Still no real answers.
+Goal: a running FastAPI service with a migrated Supabase schema.
 
-- [X] Vite React-TS, Tailwind, shadcn, React Router (`pnpm` only)
-- [X] `src/lib/env.ts` validates `VITE_API_BASE_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
-- [X] `src/lib/supabase.ts` browser client (anon key only)
-- [X] Email sign-in / sign-up pages; session in the shared client
-- [X] Protected chat route; unauthenticated users bounce to login
-- [X] `src/lib/http.ts` + `src/lib/api.ts` — base URL, bearer injection, timeouts, typed errors (`isNetworkError`)
-- [X] Verify sign-up → sign-in loop end-to-end: `pnpm dev`, create an account with a real email, confirm via the Supabase inbox link, sign in, land on `/`, sign out returns to `/login`, direct-hitting `/` while signed out redirects to `/login`
-
-
----
-
-## Phase 5 — Chat loop with a stub assistant
-
-Goal: end-to-end request path before ingestion or the real model. Proves streaming + persistence.
-
-- [X] FastAPI thread CRUD: create thread, list own threads, load message history
-  - [X] 403 on cross-user thread access (`require_thread_access` from Phase 3 exercised on real routes)
-  - [X] 404 for a thread that does not exist
-- [X] `POST /chat/stream` accepts AI SDK-shaped `{ threadId, messages }`
-  - [X] 422 on a malformed request body (typed Pydantic request model)
-  - [X] `app/chat/messages.py` — convert AI SDK UI messages to/from internal message types
-- [X] Stub stream (fixed text) in AI SDK event format
-  - [X] `app/chat/streaming.py` — emits AI SDK-compatible streaming events
-- [X] Persist user + assistant messages after a successful stub turn
-- [X] Frontend: AI SDK `useChat` + `DefaultChatTransport` pointing at FastAPI (not a Vite route)
-  - [X] Install `ai` / `@ai-sdk/react` (`pnpm add`)
-  - [X] `src/lib/api.ts` — create thread, list threads, fetch message history
-- [X] Thread list + new chat in the UI
-  - [X] Route for an individual thread (e.g. `/threads/:id`)
+- [x] Init backend deps and project layout ([backend-setup](guides/backend-setup.md))
+- [x] `app/config.py` — settings module, fail fast on missing env vars
+- [x] `app/main.py` — FastAPI app, CORS, health check (`GET /health`)
+- [x] SQLAlchemy models in `app/database/models/`:
+  - [x] `users`
+  - [x] `source_documents`
+  - [x] `document_chunks` (embedding + generated `tsvector`)
+  - [x] `chat_threads`
+  - [x] `chat_messages`
+  - [x] `message_citations`
+- [x] Alembic init + first migration:
+  - [x] `create extension if not exists vector`
+  - [x] `vector(1536)` embedding column
+  - [x] generated `tsvector` column on chunks
+  - [x] HNSW index (vector) + GIN index (full-text)
+  - [x] RLS policies (users see only their own chats)
+- [x] `uv run alembic upgrade head` against Supabase direct connection
+- [x] `app/database/supabase.py` — user-scoped and service-role clients
+- [x] Verify: `uv run uvicorn app.main:app --reload` → health check returns 200
 
 ---
 
-## Phase 6 — Corpus ingestion
+## Phase 2 — Auth (full stack)
 
-Goal: sample 10-Ks become searchable rows. Download script already exists; ingestion does not.
+Goal: analysts can sign in with email; backend rejects unauthenticated requests.
 
-- [ ] Run `uv run data/download.py` from repo root (set `USER_AGENT`); confirm `data/downloads/` + `manifest.json`
-- [ ] `backend/ingest/`: HTML/filing → normalized Markdown on `source_documents`
-- [ ] Chunk with page/section metadata (ticker, company, filing type, date, year, accession, page, offsets)
-- [ ] Embed chunks (configured OpenAI model); write `document_chunks` including `tsvector`
-- [ ] Idempotent re-run (same filing does not duplicate blindly)
-- [ ] Unit tests for parse/chunk (no network)
+**Backend**
 
----
+- [x] `app/auth/dependencies.py` — verify `Authorization: Bearer <supabase_jwt>`, expose `get_current_user`
+- [x] Reject missing/expired tokens with `401` before any chat or retrieval work
 
-## Phase 7 — Hybrid retrieval
+**Frontend**
 
-Goal: a question returns bounded, ranked passages. Testable without the LLM.
-
-- [ ] Query embed → `pgvector` search on `document_chunks.embedding`
-- [ ] Postgres full-text on `document_chunks.search_vector`
-- [ ] Reciprocal Rank Fusion in Python
-- [ ] Fetch selected chunks + document metadata + optional neighbors
-- [ ] Bounded tools for the agent later: `search_filings`, `read_chunk`, `read_surrounding_chunks` (no agent-generated SQL)
-- [ ] Unit tests for fusion + ranking policy
+- [x] Scaffold Vite + React + TypeScript + Tailwind + shadcn ([frontend-setup](guides/frontend-setup.md))
+- [x] `src/lib/env.ts` — validate `VITE_API_BASE_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
+- [x] `src/lib/supabase.ts` — browser Supabase client
+- [x] `src/lib/http.ts` + `src/lib/api.ts` — fetch wrapper with automatic bearer token
+- [x] Sign-in / sign-up pages (email only, no SSO)
+- [x] Protected routes — redirect unauthenticated users to login
+- [x] Verify: sign up, sign in, token reaches backend on a test authenticated endpoint
 
 ---
 
-## Phase 8 — PydanticAI agent (grounded answers)
+## Phase 3 — Chat shell (vertical slice, stubbed)
 
-Goal: typed assistant that answers only from retrieved passages.
+Goal: end-to-end chat UI streaming from FastAPI, no real retrieval yet.
 
-- [ ] `assistant/outputs.py` — `GroundedAnswer`, `Citation`, `SourcePassage`
-- [ ] `assistant/deps.py` — request-scoped deps (user, thread, retriever, validator)
-- [ ] `assistant/instructions.md` — corpus only; cite every claim; refuse if insufficient; no stock picks / investment advice
-- [ ] `assistant/agent.py` + `chat/orchestrator.py` for one full turn
-- [ ] Stream text deltas + citation/source parts to the browser
-- [ ] Persist citations on `message_citations` after a successful run
+**Backend**
 
----
+- [x] Chat thread CRUD: list threads, create thread, load message history
+- [x] `POST /chat/stream` — accepts AI SDK message format, streams a stubbed assistant reply
+- [x] Persist user + assistant messages to `chat_messages` after stream completes
+- [x] `403` when user accesses another user's thread
 
-## Phase 9 — Grounding (trust is code, not a prompt)
+**Frontend**
 
-Matches the brief: never invent facts; always cite; show the passage.
-
-- [ ] Every answer has ≥1 citation **or** an explicit “not enough evidence” refusal
-- [ ] Every citation maps to a passage retrieved for **this** request
-- [ ] Cited payload includes company, filing, date, page/section, excerpt
-- [ ] Validation failure → controlled error, not a polished unsupported answer
-- [ ] Unit tests for citation extraction + grounding (required)
+- [x] React Router: login, chat list, chat thread routes
+- [x] AI SDK chat primitives pointed at `POST /chat/stream` with Supabase bearer token
+- [x] Thread sidebar (past conversations)
+- [x] Basic message list + input + streaming indicator
+- [x] Verify: create thread, send message, see streamed stub response, reload and see history
 
 ---
 
-## Phase 10 — Chat UI that analysts will actually use
+## Phase 4 — Ingestion pipeline
 
-- [ ] Render citations as filing + page (click → underlying passage)
-- [ ] Passage panel / drawer for one-click verify
-- [ ] Empty states, streaming status, auth/network vs HTTP errors
-- [ ] Own past conversations only
-- [ ] `pnpm tsc --noEmit` and `pnpm lint` clean
-- [ ] Manual browser pass: login → new thread → question → citation → passage → history
+Goal: SEC filings in the corpus are parsed, chunked, embedded, and stored in Supabase.
 
----
-
-## Phase 11 — Brief quality bar (pilot questions)
-
-Use the sample corpus (AAPL, AMZN, GOOGL, MSFT, NVDA 10-Ks). For each, the bot should cite passages or refuse to infer.
-
-- [ ] Apple revenue mix 2021–2025 (iPhone, Services, Mac, iPad, Wearables)
-- [ ] Amazon AWS vs NA vs International operating income/margin
-- [ ] NVIDIA Data Center demand, concentration, supply constraints
-- [ ] Microsoft Azure / AI infra / capacity language over time
-- [ ] Alphabet segment revenue trends
-- [ ] Risk-factor language on AI, cloud, export controls, supply chain, regulation
-- [ ] Apple + NVIDIA supplier / manufacturing dependence
-- [ ] Capex and purchase commitments (MSFT, GOOGL, AMZN, NVDA)
-- [ ] Geographic revenue exposures, latest 10-K + YoY
-- [ ] “Did generative AI improve margins?” — evidence only; refuse beyond filings
+- [ ] `ingest/` scripts (or CLI entrypoint) for one-off corpus loading
+- [ ] HTML → normalized Markdown extraction (preserve page/section metadata)
+- [ ] Chunking strategy (size + overlap; store chunk index, page, section, ticker, filing type, year)
+- [ ] Write `source_documents` rows with filing metadata from `manifest.json`
+- [ ] Write `document_chunks` rows with text + metadata
+- [ ] OpenAI embedding generation → store `vector(1536)` per chunk
+- [ ] Generated `tsvector` populated for full-text search
+- [ ] Idempotent re-run (skip already-ingested documents)
+- [ ] Unit tests: chunking logic, metadata extraction
+- [ ] Run ingestion on full sample corpus (25 filings × 5 companies)
+- [ ] Verify: chunks exist in Supabase; spot-check a known passage (e.g. Apple revenue mix table)
 
 ---
 
-## Phase 12 — Deploy (small cloud footprint)
+## Phase 5 — Retrieval
 
-- [ ] Railway backend: Uvicorn, env vars, CORS for the real frontend origin
-- [ ] Railway frontend: Vite static build, `VITE_*` for prod Supabase + API URL
-- [ ] Production auth: re-enable email confirmation if it was off for local
-- [ ] Confirm service-role key never in the frontend
-- [ ] Smoke: sign in on prod URL, one grounded question, citations persist
+Goal: a user question returns ranked, relevant source passages.
 
----
-
-## Explicitly out of scope (do not add)
-
-- Trading recommendations / stock picks
-- News, social, alternative data
-- Multi-tenant / billing / mobile app
-- Next.js, SSR, frontend calling OpenAI
-- Vector DB other than Supabase `pgvector`
-- Frontend unit/e2e test suite (browser + `tsc` + lint only)
+- [ ] `retrieval/queries.py` — pgvector semantic search over `document_chunks`
+- [ ] `retrieval/queries.py` — Postgres full-text search over `search_vector`
+- [ ] `retrieval/fusion.py` — Reciprocal Rank Fusion in Python
+- [ ] `retrieval/retriever.py` — query → fused ranked passages + neighbor chunks
+- [ ] Unit tests: fusion ranking, query assembly (mock DB)
+- [ ] Integration test (optional, `@pytest.mark.integration`): real query against ingested corpus
+- [ ] Verify: test queries from [client-brief](client-brief.md) return relevant chunks (manual or scripted)
 
 ---
 
-## Definition of done (from the brief)
+## Phase 6 — LLM agent & grounding
 
-Pilot (5 senior analysts), one week: **≥3 hours saved per analyst per week**, answers trusted enough to use as intake, every claim citable to filing + page with the passage visible. If yes, firm-wide rollout.
+Goal: grounded answers with enforced citations — the core product contract.
+
+- [ ] `assistant/instructions.md` — product contract (cite everything, refuse to invent, no stock picks)
+- [ ] PydanticAI agent with typed deps (`DocumentAgentDeps`) and output (`GroundedAnswer`)
+- [ ] Agent tools: `search_filings`, `read_chunk`, `read_surrounding_chunks`
+- [ ] `chat/orchestrator.py` — one turn: retrieve → agent → validate → stream → persist
+- [ ] `grounding/validator.py` — every citation maps to a retrieved passage; fail closed on violation
+- [ ] `chat/streaming.py` — AI SDK-compatible stream (text deltas + citation metadata parts)
+- [ ] Persist `message_citations` linked to assistant messages
+- [ ] Unit tests: citation validation, grounding enforcement, message conversion
+- [ ] Verify against [client-brief example questions](client-brief.md#example-analyst-questions):
+  - [ ] Answers cite specific filings and pages
+  - [ ] Under-specified questions get "not enough evidence" responses
+  - [ ] Question 10 (generative AI margins) refuses to infer beyond filings
+
+---
+
+## Phase 7 — Trust UI (citations & source passages)
+
+Goal: analysts can verify every claim in one click — this is what makes the product usable.
+
+- [ ] Citation chips/links on assistant messages (company, filing type, date, page/section)
+- [ ] Source passage panel — show underlying excerpt for selected citation
+- [ ] Empty states (no threads, no corpus match)
+- [ ] Error states (auth expired, retrieval failure, grounding failure, network/CORS)
+- [ ] Loading/streaming status during assistant run
+- [ ] Verify: click a citation → see the exact passage from the filing
+
+---
+
+## Phase 8 — Pilot readiness
+
+Goal: 5 senior analysts can use it for a week and report ≥3 hours saved per analyst per week.
+
+- [ ] README "Running locally" section — copy-paste commands for backend + frontend + env vars
+- [ ] Seed or document how to ingest/update the corpus
+- [ ] Smoke-test all 10 example questions from the client brief
+- [ ] Confirm chat history persists across sessions
+- [ ] Confirm ~40-user scale assumptions (no hardcoded single-user shortcuts)
+- [ ] Basic structured logging on backend (`structlog`) for debugging failed turns
+- [ ] Review latency: streaming starts within a few seconds for typical queries
+
+---
+
+## Phase 9 — Deployment (Railway)
+
+- [ ] Railway: backend service (Uvicorn, env vars, `ALLOWED_ORIGINS`)
+- [ ] Railway: frontend service (Vite build, `VITE_*` env vars at build time)
+- [ ] Supabase: re-enable email confirmation for production if disabled during dev
+- [ ] Run `alembic upgrade head` against production Supabase (direct connection)
+- [ ] Run ingestion against production database
+- [ ] End-to-end test on deployed URLs with a real Driftwood-style email account
+
+---
+
+## Quick reference
+
+| Doc | Purpose |
+| --- | ------- |
+| [client-brief.md](client-brief.md) | What Driftwood needs and example questions |
+| [architecture.md](architecture.md) | System design, data model, streaming contract |
+| [guides/supabase-setup.md](guides/supabase-setup.md) | Hosted Postgres + Auth |
+| [guides/backend-setup.md](guides/backend-setup.md) | FastAPI + Alembic commands |
+| [guides/frontend-setup.md](guides/frontend-setup.md) | Vite + React scaffold commands |
