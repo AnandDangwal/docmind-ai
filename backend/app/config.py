@@ -1,6 +1,5 @@
-import os
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -19,9 +18,11 @@ class Settings(BaseSettings):
     supabase_anon_key: SecretStr
     supabase_service_role_key: SecretStr
     database_url: SecretStr
-    openai_api_key: SecretStr
-    openai_embedding_model: str
-    openai_embedding_dimensions: int = Field(gt=0)
+    gemini_api_key: SecretStr
+    gemini_chat_model: str = Field(min_length=1)
+    gemini_reasoning_effort: Literal["none", "low", "medium", "high"]
+    gemini_embedding_model: str
+    gemini_embedding_dimensions: int = Field(gt=0, le=3072)
     allowed_origins: Annotated[list[str], NoDecode] = Field(min_length=1)
 
     @field_validator("allowed_origins", mode="before")
@@ -30,9 +31,5 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
-
-    def model_post_init(self, _context: object) -> None:
-        os.environ["OPENAI_API_KEY"] = self.openai_api_key.get_secret_value()
-
 
 settings = Settings()

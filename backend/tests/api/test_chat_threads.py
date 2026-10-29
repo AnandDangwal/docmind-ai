@@ -3,9 +3,28 @@ from __future__ import annotations
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import SQLAlchemyError
 
+from app.config import settings
 from tests.api.conftest import CURRENT_USER_ID, OTHER_USER_ID
 from tests.api.fakes import FakeChatStore
+
+
+def test_database_failure_returns_readable_error_with_cors(client, monkeypatch):
+    async def fail(*args, **kwargs):
+        raise SQLAlchemyError("private database details")
+
+    monkeypatch.setattr("app.api.chat.create_thread", fail)
+    origin = settings.allowed_origins[0]
+    response = client.post(
+        "/chat/threads", json={"title": None}, headers={"Origin": origin}
+    )
+    assert response.status_code == 503
+    assert response.headers["access-control-allow-origin"] == origin
+    assert response.json() == {
+        "detail": "The database request failed. Please try again shortly."
+    }
+    assert "private database details" not in response.text
 
 
 def test_create_and_list_threads(client: TestClient) -> None:

@@ -29,3 +29,16 @@ near-duplicates or repetition embedded inside a larger paragraph.
 
 Re-running `convert_to_markdown.py` regenerates the uncleaned Markdown, so run
 the cleanup again afterward. `markdown/manifest.json` is left unchanged.
+
+## Source document ingestion
+
+After conversion and cleanup, load the Markdown filings into Supabase from the
+backend environment:
+
+```bash
+cd backend
+uv run python -m ingest
+```
+
+The command validates the complete corpus before opening a database session and
+skips accession numbers that already exist in `source_documents`.

@@ -43,6 +43,7 @@ export type RequestOptions = {
 type HttpClientConfig = {
   baseUrl: string
   getAccessToken: () => Promise<string | null>
+  onUnauthorized?: () => Promise<void> | void
   timeoutMs?: number
 }
 
@@ -77,6 +78,7 @@ export function createHttpClient(config: HttpClientConfig) {
       throw new ApiError(`Network error: ${method} ${path}`, { status: null, isNetworkError: true })
     }
 
+    if (response.status === 401) await config.onUnauthorized?.()
     const body = await readBody(response)
     if (!response.ok) {
       throw new ApiError(errorMessage(body, response), { status: response.status, body })

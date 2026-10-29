@@ -4,7 +4,14 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    UserPromptPart,
+)
 
 
 class UIMessagePart(BaseModel):
@@ -20,8 +27,16 @@ class UIMessage(BaseModel):
 
 
 class ChatStreamRequest(BaseModel):
-    thread_id: UUID
+    thread_id: UUID = Field(alias="threadId")
     messages: list[UIMessage]
+
+    @model_validator(mode="after")
+    def require_question(self) -> ChatStreamRequest:
+        if not self.messages or self.messages[-1].role != "user":
+            raise ValueError("A final user message is required")
+        if not text_from_parts(ui_message_to_parts(self.messages[-1])).strip():
+            raise ValueError("A nonblank user text message is required")
+        return self
 
 
 class CreateThreadRequest(BaseModel):
@@ -52,3 +67,24 @@ def ui_message_to_parts(msg: UIMessage) -> list[dict[str, Any]]:
 
 def assistant_text_to_parts(text: str) -> list[dict[str, Any]]:
     return [{"type": "text", "text": text}]
+
+
+def text_from_parts(parts: list[dict]) -> str:
+    return "\n".join(
+        part["text"]
+        for part in parts
+        if part.get("type") == "text" and isinstance(part.get("text"), str)
+    )
+
+
+def stored_messages_to_history(messages: list) -> list[ModelMessage]:
+    history: list[ModelMessage] = []
+    for message in messages:
+        text = text_from_parts(message.parts)
+        if not text.strip():
+            continue
+        if message.role == "user":
+            history.append(ModelRequest(parts=[UserPromptPart(text)]))
+        elif message.role == "assistant":
+            history.append(ModelResponse(parts=[TextPart(text)]))
+    return history

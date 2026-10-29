@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react"
 import { Navigate, useLocation } from "react-router-dom"
 import { supabase } from "@/lib/supabase"
-import { useAuth } from "@/lib/auth"
+import { useAuth } from "@/lib/useAuth"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"

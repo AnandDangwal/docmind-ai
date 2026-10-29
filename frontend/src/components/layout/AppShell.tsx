@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react"
 import { Outlet, useNavigate, useParams } from "react-router-dom"
 import { supabase } from "@/lib/supabase"
-import { useAuth } from "@/lib/auth"
-import { createThread, isApiError, listThreads, type Thread } from "@/lib/api"
+import { useAuth } from "@/lib/useAuth"
+import { createThread, listThreads, requestErrorMessage, type Thread } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 
 export function AppShell() {
@@ -15,8 +15,11 @@ export function AppShell() {
 
   const refreshThreads = useCallback(() => {
     listThreads()
-      .then(setThreads)
-      .catch((err) => setError(isApiError(err) ? err.message : "Request failed"))
+      .then((loadedThreads) => {
+        setThreads(loadedThreads)
+        setError(null)
+      })
+      .catch((err) => setError(requestErrorMessage(err)))
   }, [])
 
   useEffect(() => {
@@ -31,7 +34,7 @@ export function AppShell() {
       setThreads((prev) => (prev ? [thread, ...prev] : [thread]))
       navigate(`/threads/${thread.id}`)
     } catch (err) {
-      setError(isApiError(err) ? err.message : "Request failed")
+      setError(requestErrorMessage(err))
     } finally {
       setCreating(false)
     }
@@ -57,7 +60,9 @@ export function AppShell() {
           {error && <p className="text-xs text-destructive">{error}</p>}
           {!threads && !error && <p className="text-xs text-muted-foreground">Loading…</p>}
           {threads && threads.length === 0 && (
-            <p className="text-xs text-muted-foreground">No conversations yet.</p>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              No conversations yet. Create a new chat to begin exploring the filing corpus.
+            </p>
           )}
 
           {threads && threads.length > 0 && (

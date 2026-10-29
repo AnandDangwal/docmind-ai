@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { getThreadMessages, isApiError, type ChatMessage } from "@/lib/api"
+import { getThreadMessages, requestErrorMessage, type ChatMessage } from "@/lib/api"
 import { ThreadChat } from "@/components/chat/ThreadChat"
 
 // Keyed by threadId from the caller so switching threads remounts this
@@ -15,7 +15,7 @@ export function ThreadLoader({ threadId }: { threadId: string }) {
         if (!cancelled) setInitialMessages(messages)
       })
       .catch((err) => {
-        if (!cancelled) setError(isApiError(err) ? err.message : "Request failed")
+        if (!cancelled) setError(requestErrorMessage(err))
       })
     return () => {
       cancelled = true
@@ -24,7 +24,10 @@ export function ThreadLoader({ threadId }: { threadId: string }) {
 
   if (error) {
     return (
-      <div className="flex flex-1 items-center justify-center text-sm text-destructive">{error}</div>
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+        <p className="text-sm font-medium text-destructive">This conversation could not be loaded</p>
+        <p className="max-w-md text-sm text-muted-foreground">{error}</p>
+      </div>
     )
   }
   if (!initialMessages) {

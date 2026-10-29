@@ -1,7 +1,7 @@
-import type { UIMessage } from "ai"
 import { env } from "@/lib/env"
-import { createHttpClient } from "@/lib/http"
+import { createHttpClient, isApiError } from "@/lib/http"
 import { supabase } from "@/lib/supabase"
+import type { ChatUIMessage } from "@/lib/chatTypes"
 
 export { ApiError, isApiError } from "@/lib/http"
 
@@ -13,9 +13,14 @@ export async function getAccessToken(): Promise<string | null> {
   return data.session?.access_token ?? null
 }
 
+export async function expireSession(): Promise<void> {
+  await supabase.auth.signOut({ scope: "local" })
+}
+
 export const api = createHttpClient({
   baseUrl: env.apiBaseUrl,
   getAccessToken,
+  onUnauthorized: expireSession,
 })
 
 export type Thread = {
@@ -25,8 +30,18 @@ export type Thread = {
   updated_at: string
 }
 
-export type ChatMessage = Pick<UIMessage, "id" | "role" | "parts"> & {
+export type ChatMessage = Pick<ChatUIMessage, "id" | "role" | "parts"> & {
   created_at: string
+}
+
+export function requestErrorMessage(error: unknown): string {
+  if (!isApiError(error)) return "The request failed. Please try again."
+  if (error.status === 401) return "Your session expired. Sign in again to continue."
+  if (error.isTimeout) return "The service took too long to respond. Please try again."
+  if (error.isNetworkError) {
+    return "The backend could not be reached. Check that it is running and that CORS is configured."
+  }
+  return error.message
 }
 
 export function createThread(title?: string): Promise<Thread> {

@@ -10,7 +10,6 @@ dependencies = [
     "alembic==1.19.1",
     "fastapi==0.141.1",
     "httpx==0.28.1",
-    "openai==3.3.1",
     "pgvector==0.5.0",
     "psycopg[binary]==3.3.4",
     "pydantic==2.13.4",
@@ -28,13 +27,18 @@ packages = ["app"]
 [tool.pytest.ini_options]
 markers = ["integration: requires live DB/Supabase credentials"]
 
+[project.optional-dependencies]
+ingest = [
+    "docling==2.130.0",
+    "tiktoken==0.14.0",
+]
+
 [tool.uv]
 add-bounds = "exact"
 exclude-newer = "7 days"
 
 [dependency-groups]
 dev = [
-    "docling==2.130.0",
     "ipykernel==7.3.0",
     "pytest==9.1.1",
     "ruff==0.16.5",

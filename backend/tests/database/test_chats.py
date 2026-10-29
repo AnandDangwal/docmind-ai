@@ -6,19 +6,45 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.chats import (
+    create_citations,
     create_message,
     create_thread,
     get_thread,
     list_messages_for_thread,
     list_threads_for_user,
 )
-from app.database.models import MessageRole, User
+from app.database.models import (
+    ChatMessage,
+    DocumentChunk,
+    MessageCitation,
+    MessageRole,
+    User,
+)
 from app.database.session import AsyncSessionLocal
 
 pytestmark = pytest.mark.integration
+
+
+def test_first_chat_provisions_user_and_second_chat_reuses_it() -> None:
+    async def run():
+        async with AsyncSessionLocal() as session:
+            user_id = uuid.uuid4()
+            try:
+                assert await session.get(User, user_id) is None
+                first = await create_thread(session, user_id=user_id, title=None)
+                second = await create_thread(session, user_id=user_id, title=None)
+                assert await session.get(User, user_id) is not None
+                threads = await list_threads_for_user(session, user_id=user_id)
+                assert {thread.id for thread in threads} == {first.id, second.id}
+                assert first.user_id == second.user_id == user_id
+            finally:
+                await session.rollback()
+
+    asyncio.run(run())
 
 
 @asynccontextmanager
@@ -33,7 +59,9 @@ async def _seeded_session() -> AsyncIterator[tuple[AsyncSession, uuid.UUID]]:
             await db_session.rollback()
 
 
-def _run_seeded(test_body: Callable[[AsyncSession, uuid.UUID], Awaitable[None]]) -> None:
+def _run_seeded(
+    test_body: Callable[[AsyncSession, uuid.UUID], Awaitable[None]],
+) -> None:
     async def runner() -> None:
         async with _seeded_session() as (db_session, user_id):
             await test_body(db_session, user_id)
@@ -76,5 +104,67 @@ def test_get_thread_returns_none_when_missing() -> None:
     async def body(db_session: AsyncSession, _user_id: uuid.UUID) -> None:
         result = await get_thread(db_session, thread_id=uuid.uuid4())
         assert result is None
+
+    _run_seeded(body)
+
+
+def test_citation_round_trip_and_atomic_rollback() -> None:
+    async def body(db_session: AsyncSession, user_id: uuid.UUID) -> None:
+        chunk = (await db_session.execute(select(DocumentChunk).limit(1))).scalar_one()
+        thread = await create_thread(
+            db_session, user_id=user_id, title="Grounding test"
+        )
+        message_id = uuid.uuid4()
+        part = {
+            "type": "data-citation",
+            "id": "C1",
+            "data": {
+                "citationId": "C1",
+                "chunkId": str(chunk.id),
+                "excerpt": chunk.content,
+            },
+        }
+        message = await create_message(
+            db_session,
+            thread_id=thread.id,
+            role=MessageRole.assistant,
+            parts=[{"type": "text", "text": "Claim. [C1]"}, part],
+            message_id=message_id,
+        )
+        await create_citations(db_session, message_id=message.id, parts=[part])
+        citation = (
+            await db_session.execute(
+                select(MessageCitation).where(MessageCitation.message_id == message.id)
+            )
+        ).scalar_one()
+        assert citation.chunk_id == chunk.id
+        assert citation.excerpt == chunk.content
+        await db_session.refresh(message)
+        assert message.parts[1] == part
+
+        failed_id = uuid.uuid4()
+        with pytest.raises(RuntimeError):
+            async with db_session.begin_nested():
+                await create_message(
+                    db_session,
+                    thread_id=thread.id,
+                    role=MessageRole.assistant,
+                    parts=[],
+                    message_id=failed_id,
+                )
+                await create_citations(db_session, message_id=failed_id, parts=[part])
+                raise RuntimeError("failed turn")
+        assert await db_session.get(ChatMessage, failed_id) is None
+        assert (
+            not (
+                await db_session.execute(
+                    select(MessageCitation).where(
+                        MessageCitation.message_id == failed_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
 
     _run_seeded(body)
