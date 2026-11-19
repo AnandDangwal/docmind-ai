@@ -15,6 +15,9 @@ export type CitationData = {
   fiscalYear: number
   page: number | null
   section: string | null
+  sectionPath: string | null
+  sourceAnchor: string | null
+  provenanceKind: "page" | "anchor" | "section"
   excerpt: string
   sourceUrl: string
 }

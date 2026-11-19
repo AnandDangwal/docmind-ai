@@ -20,13 +20,16 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database.models.base import EMBEDDING_DIMENSIONS, Base
 
 if TYPE_CHECKING:
+    from app.database.models.ingestion_run import IngestionRun
     from app.database.models.message_citation import MessageCitation
     from app.database.models.source_document import SourceDocument
 
 
 class DocumentChunk(Base):
     __tablename__ = "document_chunks"
-    __table_args__ = (UniqueConstraint("document_id", "chunk_index"),)
+    __table_args__ = (
+        UniqueConstraint("document_id", "ingestion_run_id", "chunk_index"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
@@ -36,6 +39,11 @@ class DocumentChunk(Base):
     )
     document_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("source_documents.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    ingestion_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("ingestion_runs.id", ondelete="RESTRICT"),
         index=True,
         nullable=False,
     )
@@ -63,4 +71,5 @@ class DocumentChunk(Base):
     )
 
     document: Mapped[SourceDocument] = relationship(back_populates="chunks")
+    ingestion_run: Mapped[IngestionRun] = relationship(back_populates="chunks")
     citations: Mapped[list[MessageCitation]] = relationship(back_populates="chunk")

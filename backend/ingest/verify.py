@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import bindparam, create_engine, func, make_url, select, text
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.database.models import DocumentChunk, SourceDocument
+from app.database.models import DocumentChunk, IngestionRun, SourceDocument
 from ingest.chunking import CHUNK_MAX_TOKENS, iter_all_markdown_paths
 
 APPLE_SPOT_CHECK = "Net sales disaggregated by significant products and services"
@@ -34,7 +37,9 @@ def _database_url() -> str:
     return url.render_as_string(hide_password=False)
 
 
-def _chunk_health(session: Session, document_ids: list[Any]) -> Any:
+def _chunk_health(
+    session: Session, document_ids: list[Any], ingestion_run_id: UUID
+) -> Any:
     statement = text(
         """
         SELECT
@@ -47,8 +52,13 @@ def _chunk_health(session: Session, document_ids: list[Any]) -> Any:
                 WHERE search_vector IS NULL OR search_vector = ''::tsvector
             ) AS missing_search_vectors,
             max(token_count) AS max_token_count
+            , count(*) FILTER (WHERE section IS NULL OR btrim(section) = '') AS missing_sections
+            , count(*) FILTER (
+                WHERE metadata->>'provenance_kind' NOT IN ('page', 'anchor', 'section')
+            ) AS missing_provenance
         FROM document_chunks
         WHERE document_id IN :document_ids
+          AND ingestion_run_id = :ingestion_run_id
         """
     ).bindparams(bindparam("document_ids", expanding=True))
     return session.execute(
@@ -56,6 +66,7 @@ def _chunk_health(session: Session, document_ids: list[Any]) -> Any:
         {
             "dimensions": settings.gemini_embedding_dimensions,
             "document_ids": document_ids,
+            "ingestion_run_id": ingestion_run_id,
         },
     ).one()
 
@@ -70,8 +81,21 @@ def _spot_preview(content: str) -> str:
     return f"{prefix}{normalized[preview_start:preview_end]}{suffix}"
 
 
-def verify_corpus(session: Session) -> VerificationResult:
-    accessions = [accession for accession, _ in iter_all_markdown_paths()]
+def verify_corpus(
+    session: Session,
+    *,
+    ingestion_run_id: UUID | None = None,
+    manifest_path=None,
+) -> VerificationResult:
+    run = (
+        session.get(IngestionRun, ingestion_run_id)
+        if ingestion_run_id
+        else session.scalar(select(IngestionRun).where(IngestionRun.status == "active"))
+    )
+    if run is None:
+        raise ValueError("Corpus generation does not exist")
+    paths = iter_all_markdown_paths(manifest_path) if manifest_path else iter_all_markdown_paths()
+    accessions = [accession for accession, _ in paths]
     documents = session.scalars(
         select(SourceDocument).where(SourceDocument.accession_number.in_(accessions))
     ).all()
@@ -89,7 +113,10 @@ def verify_corpus(session: Session) -> VerificationResult:
     chunk_counts = dict(
         session.execute(
             select(DocumentChunk.document_id, func.count(DocumentChunk.id))
-            .where(DocumentChunk.document_id.in_(document_ids))
+            .where(
+                DocumentChunk.document_id.in_(document_ids),
+                DocumentChunk.ingestion_run_id == run.id,
+            )
             .group_by(DocumentChunk.document_id)
         ).tuples().all()
     )
@@ -103,7 +130,7 @@ def verify_corpus(session: Session) -> VerificationResult:
             "Manifest documents without chunks: " + ", ".join(sorted(missing_chunks))
         )
 
-    health = _chunk_health(session, document_ids)
+    health = _chunk_health(session, document_ids, run.id)
     if health.missing_embeddings:
         raise ValueError(f"{health.missing_embeddings} chunks have no embedding")
     if health.wrong_dimensions:
@@ -120,12 +147,30 @@ def verify_corpus(session: Session) -> VerificationResult:
             f"Maximum chunk size is {health.max_token_count}; "
             f"limit is {CHUNK_MAX_TOKENS}"
         )
+    if run.extractor_version != "legacy-v1":
+        if health.missing_sections:
+            raise ValueError(f"{health.missing_sections} chunks have no section path")
+        if health.missing_provenance:
+            raise ValueError(
+                f"{health.missing_provenance} chunks have no valid provenance fallback"
+            )
+        missing_headings = [
+            document.accession_number
+            for document in documents
+            if "## Item " not in document.markdown_content
+        ]
+        if missing_headings:
+            raise ValueError(
+                "Normalized filings without canonical Item headings: "
+                + ", ".join(sorted(missing_headings))
+            )
 
     spot = session.execute(
         select(DocumentChunk, SourceDocument)
         .join(SourceDocument, SourceDocument.id == DocumentChunk.document_id)
         .where(
             SourceDocument.ticker == "AAPL",
+            DocumentChunk.ingestion_run_id == run.id,
             DocumentChunk.content.ilike(f"%{APPLE_SPOT_CHECK}%"),
         )
         .order_by(SourceDocument.fiscal_year.desc())
@@ -148,10 +193,36 @@ def verify_corpus(session: Session) -> VerificationResult:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    target = parser.add_mutually_exclusive_group()
+    target.add_argument("--generation", type=UUID)
+    target.add_argument("--staging-generation", action="store_true")
+    parser.add_argument("--manifest", type=str)
+    args = parser.parse_args()
     engine = create_engine(_database_url(), pool_pre_ping=True)
     try:
         with Session(engine) as session:
-            result = verify_corpus(session)
+            generation_id = args.generation
+            if args.staging_generation:
+                generation_id = session.scalar(
+                    select(IngestionRun.id).where(IngestionRun.status == "staging")
+                )
+                if generation_id is None:
+                    raise ValueError("No staging corpus generation exists")
+            result = verify_corpus(
+                session,
+                ingestion_run_id=generation_id,
+                manifest_path=(Path(args.manifest) if args.manifest else None),
+            )
+            if generation_id:
+                run = session.get(IngestionRun, generation_id)
+                run.verification_report = {
+                    "passed": True,
+                    "documents": result.documents,
+                    "chunks": result.chunks,
+                    "max_token_count": result.max_token_count,
+                }
+                session.commit()
     finally:
         engine.dispose()
 

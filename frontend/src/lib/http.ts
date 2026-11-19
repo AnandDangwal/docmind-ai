@@ -1,125 +1,109 @@
-// Thin fetch wrapper: base URL, JSON in/out, bearer injection, timeouts and a
-// single typed error. App code should use the `api` singleton in `@/lib/api`.
+import { env } from "@/lib/env"
+import { getAccessToken, supabase } from "@/lib/supabase"
+import type { ApiErrorBody } from "@/lib/types"
 
-const DEFAULT_TIMEOUT_MS = 30_000
+const REQUEST_TIMEOUT_MS = 20_000
 
-type ApiErrorInit = {
-  status: number | null
-  isNetworkError?: boolean
-  isTimeout?: boolean
-  body?: unknown
+export type RequestOptions = RequestInit & {
+  timeoutMs?: number
 }
 
 export class ApiError extends Error {
-  /** HTTP status, or null when no response arrived (network/CORS/timeout). */
   readonly status: number | null
-  /** True when the request never got an HTTP response (offline, DNS, CORS). */
   readonly isNetworkError: boolean
   readonly isTimeout: boolean
-  /** Parsed response body, if any. */
-  readonly body: unknown
 
-  constructor(message: string, init: ApiErrorInit) {
+  constructor(
+    message: string,
+    options: { status?: number; isNetworkError?: boolean; isTimeout?: boolean } = {},
+  ) {
     super(message)
     this.name = "ApiError"
-    this.status = init.status
-    this.isNetworkError = init.isNetworkError ?? false
-    this.isTimeout = init.isTimeout ?? false
-    this.body = init.body
+    this.status = options.status ?? null
+    this.isNetworkError = options.isNetworkError ?? false
+    this.isTimeout = options.isTimeout ?? false
   }
 }
 
-export function isApiError(error: unknown): error is ApiError {
-  return error instanceof ApiError
+async function parseError(response: Response): Promise<ApiError> {
+  let body: ApiErrorBody = {}
+
+  try {
+    body = (await response.json()) as ApiErrorBody
+  } catch {
+    // Non-JSON upstream failures still receive a useful HTTP-based message.
+  }
+
+  const message = body.detail ?? body.message ?? friendlyStatusMessage(response.status)
+  return new ApiError(message, { status: response.status })
 }
 
-export type RequestOptions = {
-  body?: unknown
-  headers?: HeadersInit
-  signal?: AbortSignal
-  timeoutMs?: number
+function friendlyStatusMessage(status: number): string {
+  switch (status) {
+    case 401:
+      return "Your session has expired. Sign in again to continue."
+    case 403:
+      return "You do not have access to this conversation."
+    case 404:
+      return "The requested conversation could not be found."
+    case 422:
+      return "The request could not be processed. Review it and try again."
+    case 502:
+      return "The research service is temporarily unavailable. Try again shortly."
+    default:
+      return "Something went wrong while contacting Document Copilot."
+  }
 }
 
-type HttpClientConfig = {
-  baseUrl: string
-  getAccessToken: () => Promise<string | null>
-  onUnauthorized?: () => Promise<void> | void
-  timeoutMs?: number
-}
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const { timeoutMs = REQUEST_TIMEOUT_MS, signal: callerSignal, ...init } = options
+  const timeoutSignal = AbortSignal.timeout(timeoutMs)
+  const signal = callerSignal
+    ? AbortSignal.any([callerSignal, timeoutSignal])
+    : timeoutSignal
 
-export function createHttpClient(config: HttpClientConfig) {
-  const defaultTimeout = config.timeoutMs ?? DEFAULT_TIMEOUT_MS
-
-  async function request<T>(method: string, path: string, options: RequestOptions = {}): Promise<T> {
-    const headers = new Headers(options.headers)
+  try {
+    const token = await getAccessToken()
+    const headers = new Headers(init.headers)
     headers.set("Accept", "application/json")
-    if (options.body !== undefined) headers.set("Content-Type", "application/json")
-    const token = await config.getAccessToken()
-    if (token) headers.set("Authorization", `Bearer ${token}`)
+    headers.set("Authorization", `Bearer ${token}`)
+    if (init.body) headers.set("Content-Type", "application/json")
+    const response = await fetch(`${env.apiBaseUrl}${path}`, {
+      ...init,
+      signal,
+      headers,
+    })
 
-    const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? defaultTimeout)
-    const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal
-
-    let response: Response
-    try {
-      response = await fetch(`${config.baseUrl}${path}`, {
-        method,
-        headers,
-        body: options.body === undefined ? undefined : JSON.stringify(options.body),
-        signal,
-      })
-    } catch (error) {
-      // Caller-initiated aborts propagate unchanged so effects can ignore them.
-      if (options.signal?.aborted) throw error
-      if (timeoutSignal.aborted) {
-        throw new ApiError(`Request timed out: ${method} ${path}`, { status: null, isTimeout: true })
-      }
-      // fetch rejects with TypeError for offline, DNS and CORS failures alike.
-      throw new ApiError(`Network error: ${method} ${path}`, { status: null, isNetworkError: true })
-    }
-
-    if (response.status === 401) await config.onUnauthorized?.()
-    const body = await readBody(response)
     if (!response.ok) {
-      throw new ApiError(errorMessage(body, response), { status: response.status, body })
+      if (response.status === 401) {
+        await supabase.auth.signOut({ scope: "local" })
+      }
+      throw await parseError(response)
     }
-    return body as T
-  }
 
-  return {
-    request,
-    get: <T>(path: string, options?: Omit<RequestOptions, "body">) => request<T>("GET", path, options),
-    post: <T>(path: string, body?: unknown, options?: RequestOptions) =>
-      request<T>("POST", path, { ...options, body }),
-    put: <T>(path: string, body?: unknown, options?: RequestOptions) =>
-      request<T>("PUT", path, { ...options, body }),
-    patch: <T>(path: string, body?: unknown, options?: RequestOptions) =>
-      request<T>("PATCH", path, { ...options, body }),
-    delete: <T>(path: string, options?: RequestOptions) => request<T>("DELETE", path, options),
-  }
-}
-
-async function readBody(response: Response): Promise<unknown> {
-  if (response.status === 204) return undefined
-  const text = await response.text()
-  if (!text) return undefined
-  if (response.headers.get("Content-Type")?.includes("application/json")) {
-    try {
-      return JSON.parse(text)
-    } catch {
-      return text
+    if (response.status === 204) {
+      return undefined as T
     }
-  }
-  return text
-}
 
-// FastAPI errors are `{ detail: string }` or, for validation, `{ detail: [{ msg }] }`.
-function errorMessage(body: unknown, response: Response): string {
-  if (typeof body === "object" && body !== null && "detail" in body) {
-    const { detail } = body
-    if (typeof detail === "string") return detail
-    if (Array.isArray(detail) && typeof detail[0]?.msg === "string") return detail[0].msg
+    return (await response.json()) as T
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error
+    }
+
+    if (callerSignal?.aborted) {
+      throw error
+    }
+
+    if (timeoutSignal.aborted) {
+      throw new ApiError("The request timed out. Check your connection and try again.", {
+        isNetworkError: true,
+        isTimeout: true,
+      })
+    }
+
+    throw new ApiError("Unable to reach the API. Check the backend URL and CORS configuration.", {
+      isNetworkError: true,
+    })
   }
-  if (typeof body === "string" && body) return body
-  return `HTTP ${response.status} ${response.statusText}`.trim()
 }

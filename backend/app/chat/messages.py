@@ -29,6 +29,7 @@ class UIMessage(BaseModel):
 class ChatStreamRequest(BaseModel):
     thread_id: UUID = Field(alias="threadId")
     messages: list[UIMessage]
+    replace_message_id: UUID | None = Field(default=None, alias="replaceMessageId")
 
     @model_validator(mode="after")
     def require_question(self) -> ChatStreamRequest:
@@ -36,6 +37,11 @@ class ChatStreamRequest(BaseModel):
             raise ValueError("A final user message is required")
         if not text_from_parts(ui_message_to_parts(self.messages[-1])).strip():
             raise ValueError("A nonblank user text message is required")
+        if (
+            self.replace_message_id is not None
+            and self.messages[-1].id != str(self.replace_message_id)
+        ):
+            raise ValueError("The replacement target must be the final user message")
         return self
 
 

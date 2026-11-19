@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import date
@@ -35,6 +36,8 @@ class SourceDocumentInput:
     accession_number: str
     source_url: str
     markdown_content: str
+    content_hash: str
+    extractor_version: str
 
 
 def _required_string(filing: dict[str, object], field: str) -> str:
@@ -66,6 +69,9 @@ def load_source_documents(manifest_path: Path) -> list[SourceDocumentInput]:
         raise TypeError("Manifest field 'filings' must be a list")
 
     markdown_dir = manifest_path.parent
+    extractor_version = manifest.get("extractor_version", "legacy-v1")
+    if not isinstance(extractor_version, str) or not extractor_version.strip():
+        raise ValueError("Manifest extractor_version must be a non-empty string")
     documents = []
     accessions = set()
     for raw_filing in filings:
@@ -107,6 +113,8 @@ def load_source_documents(manifest_path: Path) -> list[SourceDocumentInput]:
                 accession_number=accession_number,
                 source_url=_required_string(raw_filing, "source_url"),
                 markdown_content=markdown_content,
+                content_hash=hashlib.sha256(markdown_content.encode()).hexdigest(),
+                extractor_version=extractor_version,
             )
         )
     return documents
@@ -117,13 +125,14 @@ async def ingest_source_documents(
     documents: list[SourceDocumentInput],
 ) -> tuple[int, int]:
     accessions = [document.accession_number for document in documents]
-    existing = set(
+    existing_documents = list(
         await db_session.scalars(
-            select(SourceDocument.accession_number).where(
+            select(SourceDocument).where(
                 SourceDocument.accession_number.in_(accessions)
             )
         )
     )
+    existing = {document.accession_number: document for document in existing_documents}
 
     new_documents = [
         SourceDocument(
@@ -135,13 +144,30 @@ async def ingest_source_documents(
             accession_number=document.accession_number,
             source_url=document.source_url,
             markdown_content=document.markdown_content,
+            content_hash=document.content_hash,
+            extractor_version=document.extractor_version,
         )
         for document in documents
         if document.accession_number not in existing
     ]
+    updated = 0
+    for document in documents:
+        stored = existing.get(document.accession_number)
+        if stored is None or stored.content_hash == document.content_hash:
+            continue
+        stored.ticker = document.ticker
+        stored.company_name = document.company_name
+        stored.filing_type = document.filing_type
+        stored.filing_date = document.filing_date
+        stored.fiscal_year = document.fiscal_year
+        stored.source_url = document.source_url
+        stored.markdown_content = document.markdown_content
+        stored.content_hash = document.content_hash
+        stored.extractor_version = document.extractor_version
+        updated += 1
     db_session.add_all(new_documents)
     await db_session.commit()
-    return len(new_documents), len(documents) - len(new_documents)
+    return len(new_documents), updated
 
 
 async def run(manifest_path: Path) -> tuple[int, int]:
@@ -163,9 +189,9 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        inserted, skipped = asyncio.run(run(args.manifest))
+        inserted, updated = asyncio.run(run(args.manifest))
         print(f"Source documents inserted: {inserted}")
-        print(f"Source documents already present: {skipped}")
+        print(f"Source documents updated: {updated}")
     finally:
         asyncio.run(engine.dispose())
 

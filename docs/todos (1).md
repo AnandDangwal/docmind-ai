@@ -111,8 +111,8 @@ Goal: SEC filings in the corpus are parsed, chunked, embedded, and stored in Sup
 - [x] Generated `tsvector` populated for full-text search
 - [x] Idempotent re-run (skip already-ingested documents)
 - [x] Unit tests: chunking logic, metadata extraction
-- [ ] Run real Gemini ingestion on full sample corpus (25 filings across 5 companies)
-- [ ] Verify: all stored vectors match fresh Gemini embeddings; spot-check a known passage (e.g. Apple revenue mix table)
+- [x] Run real Gemini ingestion on full sample corpus (25 filings across 5 companies)
+- [x] Verify: all stored vectors match fresh Gemini embeddings; spot-check a known passage (e.g. Apple revenue mix table)
 
 ---
 
@@ -125,8 +125,8 @@ Goal: a user question returns ranked, relevant source passages.
 - [x] `retrieval/fusion.py` — Reciprocal Rank Fusion in Python
 - [x] `retrieval/retriever.py` — query → fused ranked passages + neighbor chunks
 - [x] Unit tests: fusion ranking, query assembly (mock DB)
-- [ ] Integration test (optional, `@pytest.mark.integration`): real query against the fully Gemini-embedded corpus
-- [ ] Verify: test queries from [client-brief](client-brief.md) return relevant chunks across all five companies (manual or scripted)
+- [x] Integration test (optional, `@pytest.mark.integration`): real query against the fully Gemini-embedded corpus
+- [x] Verify: test queries from [client-brief](client-brief.md) return relevant chunks across all five companies (manual or scripted)
 
 ---
 
@@ -154,11 +154,11 @@ Goal: grounded answers with enforced citations — the core product contract.
 Goal: analysts can verify every claim in one click — this is what makes the product usable.
 
 - [x] Citation chips/links on assistant messages (company, filing type, date, page/section)
-- [ ] Source passage panel — show underlying excerpt for selected citation *(deferred until the remaining filings use real embeddings)*
+- [x] Source passage panel — show underlying excerpt for selected citation
 - [x] Empty states (no threads, no corpus match)
 - [x] Error states (auth expired, retrieval failure, grounding failure, network/CORS)
 - [x] Loading/streaming status during assistant run
-- [ ] Verify: click a citation → see the exact passage from the filing *(deferred until the remaining filings use real embeddings)*
+- [x] Verify: click a citation → see the exact passage from the filing
 
 ---
 
@@ -166,13 +166,13 @@ Goal: analysts can verify every claim in one click — this is what makes the pr
 
 Goal: 5 senior analysts can use it for a week and report ≥3 hours saved per analyst per week.
 
-- [ ] README "Running locally" section — copy-paste commands for backend + frontend + env vars
-- [ ] Seed or document how to ingest/update the corpus
-- [ ] Smoke-test all 10 example questions from the client brief
-- [ ] Confirm chat history persists across sessions
-- [ ] Confirm ~40-user scale assumptions (no hardcoded single-user shortcuts)
-- [ ] Basic structured logging on backend (`structlog`) for debugging failed turns
-- [ ] Review latency: streaming starts within a few seconds for typical queries
+- [x] README "Running locally" section — copy-paste commands for backend + frontend + env vars
+- [x] Seed or document how to ingest/update the corpus
+- [ ] Smoke-test all 10 example questions from the client brief *(2026-11-19 run: 1/10 passed; Questions 1–9 hit Gemini busy/quota responses)*
+- [x] Confirm chat history persists across sessions
+- [ ] Confirm ~40-user scale assumptions *(no single-user shortcut found; live Gemini capacity still fails the pilot workload)*
+- [x] Basic structured logging on backend (`structlog`) for debugging failed turns
+- [x] Review latency: streaming starts within a few seconds for typical queries *(606.9–707.0 ms across the ten-question run)*
 
 ---
 
@@ -189,12 +189,14 @@ Goal: 5 senior analysts can use it for a week and report ≥3 hours saved per an
 
 ## Current verification note
 
-As of 2026-10-27, Supabase contains all 25 source documents and 4,197 chunks.
-The five Apple filings have been replaced with real `gemini-embedding-2`
-vectors. The remaining 20 filings still contain the previous deterministic
-development vectors and must be re-ingested after the Gemini free-tier daily
-embedding quota resets. Full-corpus ingestion and cross-company semantic
-retrieval remain unchecked until that replacement and verification complete.
+As of 2026-11-02, Supabase contains all 25 source documents and 4,197 chunks,
+re-ingested with real `gemini-embedding-2` vectors. Scripted hybrid-retrieval
+coverage now checks relevant results across all five companies. The Phase 8 API
+runner covers the full 10-question pilot, persisted history, citations, and
+first-event latency. The 2026-11-19 live run passed Question 10 but Questions
+1–9 exhausted the available Gemini primary/fallback capacity. Provider capacity,
+a clean 10/10 rerun, the analyst-week outcome, and deployment checks remain
+outstanding; see [phase-8-readiness-report.md](phase-8-readiness-report.md).
 
 ---
 

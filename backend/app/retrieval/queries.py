@@ -1,20 +1,75 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from uuid import UUID
 
 from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
-from app.database.models import EMBEDDING_DIMENSIONS, DocumentChunk, SourceDocument
+from app.database.models import (
+    EMBEDDING_DIMENSIONS,
+    DocumentChunk,
+    IngestionRun,
+    SourceDocument,
+)
 from app.retrieval.models import Chunk, RetrievalFilters, RetrievalSource, SearchHit
 
-MAX_QUERY_RESULTS = 100
+MAX_QUERY_RESULTS = 500
+_QUERY_WORD = re.compile(r"[A-Za-z][A-Za-z0-9'-]{2,}")
+_QUERY_STOP_WORDS = {
+    "about",
+    "alphabet",
+    "amazon",
+    "and",
+    "apple",
+    "based",
+    "can",
+    "companies",
+    "company",
+    "compare",
+    "data",
+    "filing",
+    "filings",
+    "financial",
+    "generate",
+    "google",
+    "hundred",
+    "hundreds",
+    "metrics",
+    "microsoft",
+    "nvidia",
+    "other",
+    "performance",
+    "please",
+    "prompt",
+    "question",
+    "summary",
+    "the",
+    "tokens",
+    "what",
+    "which",
+    "with",
+    "words",
+    "year",
+}
 
 
 def _validate_limit(limit: int) -> None:
     if not 1 <= limit <= MAX_QUERY_RESULTS:
         raise ValueError(f"limit must be between 1 and {MAX_QUERY_RESULTS}")
+
+
+def lexical_query(query: str) -> str:
+    terms = list(
+        dict.fromkeys(
+            word.casefold()
+            for word in _QUERY_WORD.findall(query)
+            if word.casefold() not in _QUERY_STOP_WORDS
+        )
+    )
+    return " OR ".join(terms[:12]) or query.strip()
 
 
 def _apply_filters(
@@ -31,7 +86,39 @@ def _apply_filters(
         statement = statement.where(
             SourceDocument.filing_type.in_(filters.filing_types)
         )
+    if filters.latest_only:
+        latest_document = aliased(SourceDocument)
+        latest_chunk = aliased(DocumentChunk)
+        latest_run = aliased(IngestionRun)
+        latest_date = (
+            select(func.max(latest_document.filing_date))
+            .select_from(latest_document)
+            .join(latest_chunk, latest_chunk.document_id == latest_document.id)
+            .join(latest_run, latest_run.id == latest_chunk.ingestion_run_id)
+            .where(
+                latest_run.status == "active",
+                latest_document.ticker == SourceDocument.ticker,
+            )
+        )
+        if filters.fiscal_years:
+            latest_date = latest_date.where(
+                latest_document.fiscal_year.in_(filters.fiscal_years)
+            )
+        if filters.filing_types:
+            latest_date = latest_date.where(
+                latest_document.filing_type.in_(filters.filing_types)
+            )
+        statement = statement.where(
+            SourceDocument.filing_date
+            == latest_date.correlate(SourceDocument).scalar_subquery()
+        )
     return statement
+
+
+def _active_chunks(statement: Select) -> Select:
+    return statement.join(
+        IngestionRun, IngestionRun.id == DocumentChunk.ingestion_run_id
+    ).where(IngestionRun.status == "active")
 
 
 def build_semantic_query(
@@ -47,7 +134,7 @@ def build_semantic_query(
             f"got {len(query_embedding)}"
         )
     distance = DocumentChunk.embedding.cosine_distance(list(query_embedding))
-    statement = (
+    statement = _active_chunks(
         select(DocumentChunk, SourceDocument, (1.0 - distance).label("score"))
         .join(SourceDocument, SourceDocument.id == DocumentChunk.document_id)
         .order_by(distance.asc(), DocumentChunk.id.asc())
@@ -65,9 +152,9 @@ def build_full_text_query(
     _validate_limit(limit)
     if not query.strip():
         raise ValueError("query must not be blank")
-    tsquery = func.websearch_to_tsquery("english", query)
+    tsquery = func.websearch_to_tsquery("english", lexical_query(query))
     rank = func.ts_rank_cd(DocumentChunk.search_vector, tsquery)
-    statement = (
+    statement = _active_chunks(
         select(DocumentChunk, SourceDocument, rank.label("score"))
         .join(SourceDocument, SourceDocument.id == DocumentChunk.document_id)
         .where(DocumentChunk.search_vector.bool_op("@@")(tsquery))
@@ -78,6 +165,7 @@ def build_full_text_query(
 
 
 def _chunk(document_chunk: DocumentChunk, document: SourceDocument) -> Chunk:
+    metadata = document_chunk.chunk_metadata
     return Chunk(
         id=document_chunk.id,
         document_id=document_chunk.document_id,
@@ -93,6 +181,21 @@ def _chunk(document_chunk: DocumentChunk, document: SourceDocument) -> Chunk:
         fiscal_year=document.fiscal_year,
         accession_number=document.accession_number,
         source_url=document.source_url,
+        section_path=(
+            metadata.get("section_path")
+            if isinstance(metadata.get("section_path"), str)
+            else document_chunk.section
+        ),
+        source_anchor=(
+            metadata.get("source_anchor")
+            if isinstance(metadata.get("source_anchor"), str)
+            else None
+        ),
+        provenance_kind=(
+            metadata.get("provenance_kind")
+            if metadata.get("provenance_kind") in {"page", "anchor", "section"}
+            else "section"
+        ),
     )
 
 
@@ -155,6 +258,22 @@ async def read_chunk(session: AsyncSession, chunk_id: UUID) -> Chunk | None:
     return _chunk(row[0], row[1])
 
 
+async def list_active_chunks(
+    session: AsyncSession, filters: RetrievalFilters
+) -> list[Chunk]:
+    statement = _active_chunks(
+        select(DocumentChunk, SourceDocument).join(
+            SourceDocument, SourceDocument.id == DocumentChunk.document_id
+        )
+    ).order_by(
+        SourceDocument.ticker,
+        SourceDocument.fiscal_year,
+        DocumentChunk.chunk_index,
+    )
+    rows = (await session.execute(_apply_filters(statement, filters))).all()
+    return [_chunk(row[0], row[1]) for row in rows]
+
+
 async def read_neighbor_chunks(
     session: AsyncSession,
     anchors: Sequence[tuple[UUID, int]],
@@ -175,10 +294,11 @@ async def read_neighbor_chunks(
     ]
     rows = (
         await session.execute(
-            select(DocumentChunk, SourceDocument)
-            .join(SourceDocument, SourceDocument.id == DocumentChunk.document_id)
-            .where(or_(*windows))
-            .order_by(DocumentChunk.document_id, DocumentChunk.chunk_index)
+            _active_chunks(
+                select(DocumentChunk, SourceDocument)
+                .join(SourceDocument, SourceDocument.id == DocumentChunk.document_id)
+                .where(or_(*windows))
+            ).order_by(DocumentChunk.document_id, DocumentChunk.chunk_index)
         )
     ).all()
     available = [_chunk(row[0], row[1]) for row in rows]

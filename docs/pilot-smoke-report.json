@@ -1,0 +1,42 @@
+{
+  "generated_at": "2026-11-19T11:25:10.578774+00:00",
+  "api_url": "http://127.0.0.1:8000",
+  "max_first_event_seconds": 3.0,
+  "questions_passed": 0,
+  "questions_completed": 2,
+  "questions_total": 10,
+  "all_passed": false,
+  "interrupted_by": "manual_stop_after_reproducing_provider_busy",
+  "results": [
+    {
+      "number": 1,
+      "question": "Across Apple's 2021-2025 10-Ks, how did the revenue mix between iPhone, Services, Mac, iPad, and Wearables change, and which category appears to have contributed most to any mix shift?",
+      "passed": false,
+      "answer_status": null,
+      "citation_count": 0,
+      "history_persisted": false,
+      "persisted_message_count": 1,
+      "first_event_ms": 662.7,
+      "first_text_ms": null,
+      "total_ms": 61522.9,
+      "causal_boundary_present": true,
+      "error": "The filings were found, but the AI analysis service is temporarily busy. The primary and fallback models were tried; please try again shortly.",
+      "answer": ""
+    },
+    {
+      "number": 2,
+      "question": "For Amazon, compare AWS operating income and margin against North America and International from 2021-2025. In which years did AWS appear to fund losses or weaker profitability elsewhere?",
+      "passed": false,
+      "answer_status": null,
+      "citation_count": 0,
+      "history_persisted": false,
+      "persisted_message_count": 1,
+      "first_event_ms": 674.1,
+      "first_text_ms": null,
+      "total_ms": 79212.7,
+      "causal_boundary_present": true,
+      "error": "The filings were found, but the AI analysis service is temporarily busy. The primary and fallback models were tried; please try again shortly.",
+      "answer": ""
+    }
+  ]
+}

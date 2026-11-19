@@ -1,57 +1,82 @@
-import { env } from "@/lib/env"
-import { createHttpClient, isApiError } from "@/lib/http"
-import { supabase } from "@/lib/supabase"
+import { ApiError, request } from "@/lib/http"
+import { getAccessToken, supabase } from "@/lib/supabase"
 import type { ChatUIMessage } from "@/lib/chatTypes"
+import type { ThreadSummary } from "@/lib/types"
 
-export { ApiError, isApiError } from "@/lib/http"
-
-// getSession() refreshes an expired access token before returning it.
-// Exported so lib/chatTransport.ts can attach the same bearer token to the
-// AI SDK's own fetch calls, which bypass this http client entirely.
-export async function getAccessToken(): Promise<string | null> {
-  const { data } = await supabase.auth.getSession()
-  return data.session?.access_token ?? null
+type ThreadWire = {
+  id: string
+  title?: string | null
+  created_at?: string
+  updated_at?: string
+  createdAt?: string
+  updatedAt?: string
 }
+
+export { getAccessToken }
 
 export async function expireSession(): Promise<void> {
   await supabase.auth.signOut({ scope: "local" })
 }
 
-export const api = createHttpClient({
-  baseUrl: env.apiBaseUrl,
-  getAccessToken,
-  onUnauthorized: expireSession,
-})
+function mapThread(thread: ThreadWire): ThreadSummary {
+  const now = new Date().toISOString()
 
-export type Thread = {
-  id: string
-  title: string | null
-  created_at: string
-  updated_at: string
-}
-
-export type ChatMessage = Pick<ChatUIMessage, "id" | "role" | "parts"> & {
-  created_at: string
-}
-
-export function requestErrorMessage(error: unknown): string {
-  if (!isApiError(error)) return "The request failed. Please try again."
-  if (error.status === 401) return "Your session expired. Sign in again to continue."
-  if (error.isTimeout) return "The service took too long to respond. Please try again."
-  if (error.isNetworkError) {
-    return "The backend could not be reached. Check that it is running and that CORS is configured."
+  return {
+    id: thread.id,
+    title: thread.title?.trim() || "New research",
+    createdAt: thread.createdAt ?? thread.created_at ?? now,
+    updatedAt: thread.updatedAt ?? thread.updated_at ?? thread.createdAt ?? thread.created_at ?? now,
   }
-  return error.message
 }
 
-export function createThread(title?: string): Promise<Thread> {
-  return api.post<Thread>("/chat/threads", { title: title ?? null })
+function unwrapThreads(payload: ThreadWire[] | { threads: ThreadWire[] }): ThreadWire[] {
+  return Array.isArray(payload) ? payload : payload.threads
 }
 
-export function listThreads(): Promise<Thread[]> {
-  return api.get<Thread[]>("/chat/threads")
-}
+export const api = {
+  async listThreads(): Promise<ThreadSummary[]> {
+    const payload = await request<ThreadWire[] | { threads: ThreadWire[] }>("/chat/threads")
+    return unwrapThreads(payload).map(mapThread)
+  },
 
-export function getThreadMessages(threadId: string): Promise<ChatMessage[]> {
-  return api.get<ChatMessage[]>(`/chat/threads/${threadId}/messages`)
+  async createThread(firstPrompt: string): Promise<ThreadSummary> {
+    const payload = await request<ThreadWire>("/chat/threads", {
+      method: "POST",
+      body: JSON.stringify({ title: firstPrompt.trim().slice(0, 80) }),
+    })
+    return mapThread(payload)
+  },
+
+  async getThreadMessages(
+    threadId: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<ChatUIMessage[]> {
+    const path = `/chat/threads/${encodeURIComponent(threadId)}/messages`
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        return await request<ChatUIMessage[]>(path, {
+          signal: options.signal,
+          timeoutMs: 30_000,
+        })
+      } catch (error) {
+        if (options.signal?.aborted) throw error
+        const retryable =
+          error instanceof ApiError && (error.isNetworkError || error.isTimeout)
+        if (!retryable || attempt === 1) throw error
+      }
+    }
+    throw new Error("Unable to load conversation messages.")
+  },
+
+  async renameThread(threadId: string, title: string): Promise<ThreadSummary> {
+    const payload = await request<ThreadWire>(`/chat/threads/${threadId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title: title.trim() }),
+    })
+    return mapThread(payload)
+  },
+
+  async deleteThread(threadId: string): Promise<void> {
+    await request<void>(`/chat/threads/${threadId}`, { method: "DELETE" })
+  },
 }

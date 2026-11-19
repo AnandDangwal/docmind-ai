@@ -49,7 +49,74 @@ You also need accounts/keys for external services once the app is wired up. Star
 
 ## Running locally
 
-To be added during the build. Setup guides:
+The commands below assume PowerShell and start from the repository root. On
+macOS/Linux, replace `Copy-Item` with `cp`.
+
+1. Create local environment files:
+
+   ```powershell
+   Copy-Item backend/.env.example backend/.env
+   Copy-Item frontend/.env.example frontend/.env
+   ```
+
+   Fill in every placeholder. The backend needs the Supabase URL, anon and
+   service-role keys, the direct/session Postgres URL, a Gemini API key, model
+   names, allowed browser origins, and logging/pool settings. The frontend only
+   receives browser-safe values: the backend URL, Supabase URL, and anon key.
+   Never copy `SUPABASE_SERVICE_ROLE_KEY` or `DATABASE_URL` into `frontend/.env`.
+
+2. Install the backend, migrate the database, and start FastAPI:
+
+   ```powershell
+   Set-Location backend
+   uv sync --extra ingest
+   uv run alembic upgrade head
+   uv run uvicorn app.main:app --reload
+   ```
+
+   Verify [http://127.0.0.1:8000/health](http://127.0.0.1:8000/health) returns
+   `{"status":"ok"}`.
+
+3. In a second terminal, install and start the SPA:
+
+   ```powershell
+   Set-Location frontend
+   pnpm install --frozen-lockfile
+   pnpm dev
+   ```
+
+   Open [http://localhost:5173](http://localhost:5173), create a Supabase email
+   account, and sign in.
+
+4. If the database does not yet contain the sample corpus, run this once from
+   `backend/` (Gemini embedding calls may incur cost):
+
+   ```powershell
+   uv run python -m ingest
+   uv run python -m ingest.chunk_and_embed --all
+   uv run python -m ingest.verify
+   ```
+
+   This seeds the active corpus from `data/markdown/manifest.json`. Corpus
+   updates use an immutable staging generation, verification, and explicit
+   activation; follow [backend/ingest/README.md](backend/ingest/README.md) so a
+   partial update never replaces the searchable corpus.
+
+5. With both services running and the corpus loaded, execute the ten-question
+   pilot smoke test:
+
+   ```powershell
+   Set-Location backend
+   uv run python pilot_smoke.py --email analyst@example.com
+   ```
+
+   The password prompt is hidden. The runner creates a separate thread per
+   question, checks citations and history through a fresh HTTP session, measures
+   first-event/first-text latency, cleans up its threads, and writes
+   `docs/pilot-smoke-report.json`. Use `--keep-threads` when analysts should
+   review the generated conversations in the UI.
+
+Detailed setup references:
 
 - [Supabase](docs/guides/supabase-setup.md) — account, hosted project (dashboard or CLI)
 - [Backend](docs/guides/backend-setup.md)

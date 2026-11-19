@@ -6,6 +6,8 @@ from app.retrieval.models import Chunk
 
 MARKER = re.compile(r"\[(C[1-9]\d*)\]")
 GROUPED_MARKERS = re.compile(r"\[((?:C[1-9]\d*)(?:\s*[,;]\s*C[1-9]\d*)+)\]")
+HTML_LINE_BREAK = re.compile(r"<br\s*/?>", re.IGNORECASE)
+TABLE_DELIMITER = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
 SAFE_STATUS_TEXT = {
     "insufficient_evidence": (
         "There is not enough evidence in the available filings to answer this question. "
@@ -20,6 +22,14 @@ SAFE_STATUS_TEXT = {
 
 class GroundingError(ValueError):
     pass
+
+
+def normalize_markdown_line_breaks(answer: GroundedAnswer) -> GroundedAnswer:
+    if answer.status != "answered":
+        return answer
+    return answer.model_copy(
+        update={"answer": HTML_LINE_BREAK.sub("\n", answer.answer)}
+    )
 
 
 def normalize_citation_markers(answer: GroundedAnswer) -> GroundedAnswer:
@@ -40,6 +50,18 @@ def safe_status_answer(answer: GroundedAnswer) -> GroundedAnswer:
     if answer.status == "answered":
         return answer
     return answer.model_copy(update={"answer": SAFE_STATUS_TEXT[answer.status]})
+
+
+def _is_markdown_structure(lines: list[str], index: int) -> bool:
+    line = lines[index].strip()
+    if re.match(r"^#{1,6}\s+", line):
+        return True
+    if TABLE_DELIMITER.fullmatch(line):
+        return True
+    return (
+        index + 1 < len(lines)
+        and TABLE_DELIMITER.fullmatch(lines[index + 1].strip()) is not None
+    )
 
 
 def validate_answer(answer: GroundedAnswer, evidence: dict[UUID, Chunk]) -> None:
@@ -69,9 +91,18 @@ def validate_answer(answer: GroundedAnswer, evidence: dict[UUID, Chunk]) -> None
         raise GroundingError("Citation refers to evidence not retrieved this turn")
     if len({citation.chunk_id for citation in answer.citations}) != len(ids):
         raise GroundingError("Reuse one citation marker for each chunk")
-    for line in answer.answer.splitlines():
+    for citation in answer.citations:
+        chunk = evidence[citation.chunk_id]
+        if chunk.page is None and not (chunk.source_anchor or chunk.section_path or chunk.section):
+            raise GroundingError("Cited evidence requires a verified page or section anchor")
+    lines = answer.answer.splitlines()
+    for index, line in enumerate(lines):
         line = line.strip()
-        if not line or not re.search(r"\w", line):
+        if (
+            not line
+            or not re.search(r"\w", line)
+            or _is_markdown_structure(lines, index)
+        ):
             continue
         if not MARKER.search(line):
             raise GroundingError(
@@ -99,6 +130,9 @@ def citation_parts(answer: GroundedAnswer, evidence: dict[UUID, Chunk]) -> list[
                     "fiscalYear": chunk.fiscal_year,
                     "page": chunk.page,
                     "section": chunk.section,
+                    "sectionPath": chunk.section_path or chunk.section,
+                    "sourceAnchor": chunk.source_anchor,
+                    "provenanceKind": chunk.provenance_kind,
                     "excerpt": chunk.content,
                     "sourceUrl": chunk.source_url,
                 },

@@ -71,16 +71,64 @@ def test_live_retriever_fuses_results_and_fetches_neighbors() -> None:
 
 
 @pytest.mark.parametrize(
-    ("query", "ticker"),
+    ("query", "ticker", "relevance_terms"),
     [
-        ("net sales", "AAPL"),
-        ("AWS operating income", "AMZN"),
-        ("Data Center demand", "NVDA"),
-        ("Azure cloud capacity", "MSFT"),
-        ("Google Cloud revenue", "GOOGL"),
+        (
+            (
+                "Across Apple's 2021-2025 10-Ks, how did the revenue mix between "
+                "iPhone, Services, Mac, iPad, and Wearables change?"
+            ),
+            "AAPL",
+            ("iphone", "services", "mac", "ipad", "wearables"),
+        ),
+        (
+            (
+                "For Amazon, compare AWS operating income and margin against North "
+                "America and International from 2021-2025."
+            ),
+            "AMZN",
+            ("aws", "operating income", "north america", "international"),
+        ),
+        (
+            (
+                "How did NVIDIA describe demand drivers, customer concentration, "
+                "and supply constraints for its Data Center business from fiscal "
+                "2021 through fiscal 2025?"
+            ),
+            "NVDA",
+            ("data center", "demand", "customer", "supply"),
+        ),
+        (
+            (
+                "Across Microsoft's 2021-2025 filings, what changed in how the "
+                "company describes Azure, AI infrastructure, and cloud capacity "
+                "constraints?"
+            ),
+            "MSFT",
+            ("azure", "ai", "infrastructure"),
+        ),
+        (
+            (
+                "For Alphabet, how did Google Search, YouTube ads, Google Network, "
+                "subscriptions, platforms, devices, and Google Cloud revenue trends "
+                "differ across the available 10-Ks?"
+            ),
+            "GOOGL",
+            (
+                "google search",
+                "youtube",
+                "google network",
+                "subscriptions",
+                "google cloud",
+            ),
+        ),
     ],
 )
-def test_live_hybrid_client_brief_smoke_queries(query: str, ticker: str) -> None:
+def test_live_hybrid_client_brief_smoke_queries(
+    query: str,
+    ticker: str,
+    relevance_terms: tuple[str, ...],
+) -> None:
     """Verify live hybrid retrieval with Gemini query and corpus embeddings."""
 
     async def run() -> None:
@@ -88,19 +136,21 @@ def test_live_hybrid_client_brief_smoke_queries(query: str, ticker: str) -> None
 
         passages = await retriever.search_filings(
             query,
-            RetrievalFilters(tickers=(ticker,)),
-            top_k=3,
-            candidate_k=10,
+            top_k=5,
+            candidate_k=50,
             neighbor_window=0,
         )
 
-        assert len(passages) == 3
+        assert len(passages) == 5
         assert all(passage.anchor.ticker == ticker for passage in passages)
-        assert all(passage.source_hits for passage in passages)
         assert all(
-            hit.source in {"semantic", "lexical"}
+            any(hit.source == "semantic" for hit in passage.source_hits)
             for passage in passages
-            for hit in passage.source_hits
         )
+        retrieved_text = " ".join(
+            passage.anchor.content.lower() for passage in passages
+        )
+        missing_terms = [term for term in relevance_terms if term not in retrieved_text]
+        assert not missing_terms, f"missing relevant terms: {missing_terms}"
 
     asyncio.run(run())

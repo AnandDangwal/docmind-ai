@@ -27,8 +27,12 @@ export function createChatTransport(threadId: string): DefaultChatTransport<Chat
         throw error
       }
     },
-    prepareSendMessagesRequest: ({ messages }) => ({
-      body: { threadId, messages },
+    prepareSendMessagesRequest: ({ messages, messageId }) => ({
+      body: {
+        threadId,
+        messages,
+        ...(messageId ? { replaceMessageId: messageId } : {}),
+      },
     }),
   })
 }

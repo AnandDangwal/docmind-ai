@@ -20,6 +20,21 @@ def test_openai_tokenizer_accepts_special_token_text() -> None:
     assert tokenizer.count_tokens("ordinary <|endoftext|> filing text") > 0
 
 
+def test_extraction_artifact_cleanup_removes_empty_underscore_rows() -> None:
+    text = (
+        "Cover text\n"
+        "\\_ \\_ \\_ \\_\n"
+        "\\_\n\\_\n\\_\n\n"
+        "Revenue discussion with escaped_name preserved."
+    )
+
+    cleaned = chunking._clean_extraction_artifacts(text)
+
+    assert "\\_" not in cleaned
+    assert "Cover text" in cleaned
+    assert "escaped_name" in cleaned
+
+
 def test_hybrid_chunker_enables_merging_and_table_headers() -> None:
     hybrid_chunker = chunking.build_hybrid_chunker()
 

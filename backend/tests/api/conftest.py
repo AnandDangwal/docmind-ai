@@ -39,6 +39,7 @@ def client(
 
     async def run(*args, **kwargs):
         return SimpleNamespace(
+            response=SimpleNamespace(model_name="test-model"),
             output=GroundedAnswer(
                 status="insufficient_evidence",
                 answer="Not enough evidence.",
@@ -60,6 +61,8 @@ def client(
         chat_api_module, "list_threads_for_user", store.list_threads_for_user
     )
     monkeypatch.setattr(chat_api_module, "get_thread", store.get_thread)
+    monkeypatch.setattr(chat_api_module, "delete_thread", store.delete_thread)
+    monkeypatch.setattr(chat_api_module, "get_message", store.get_message)
     monkeypatch.setattr(
         chat_api_module, "list_messages_for_thread", store.list_messages_for_thread
     )

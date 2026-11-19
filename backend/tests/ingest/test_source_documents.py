@@ -43,6 +43,8 @@ def test_load_source_documents_extracts_database_fields(tmp_path: Path) -> None:
     assert document.filing_type == "10-K"
     assert document.fiscal_year == 2025
     assert document.markdown_content == "# Apple filing\n"
+    assert len(document.content_hash) == 64
+    assert document.extractor_version == "legacy-v1"
 
 
 def test_load_source_documents_rejects_path_outside_corpus(tmp_path: Path) -> None:

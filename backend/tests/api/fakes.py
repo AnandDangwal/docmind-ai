@@ -37,6 +37,17 @@ class FakeChatStore:
         self.threads[thread.id] = thread
         return thread
 
+    def seed_message(
+        self, *, thread_id: UUID, role: MessageRole, text: str
+    ) -> FakeMessage:
+        message = FakeMessage(
+            thread_id=thread_id,
+            role=role,
+            parts=[{"type": "text", "text": text}],
+        )
+        self.messages.append(message)
+        return message
+
     async def create_thread(
         self, _session: object, *, user_id: UUID, title: str | None
     ) -> FakeThread:
@@ -57,6 +68,19 @@ class FakeChatStore:
         self, _session: object, *, thread_id: UUID
     ) -> FakeThread | None:
         return self.threads.get(thread_id)
+
+    async def delete_thread(self, _session: object, *, thread_id: UUID) -> None:
+        self.threads.pop(thread_id, None)
+        self.messages = [
+            message for message in self.messages if message.thread_id != thread_id
+        ]
+
+    async def get_message(
+        self, _session: object, *, message_id: UUID
+    ) -> FakeMessage | None:
+        return next(
+            (message for message in self.messages if message.id == message_id), None
+        )
 
     async def list_messages_for_thread(
         self, _session: object, *, thread_id: UUID

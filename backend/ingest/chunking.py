@@ -24,6 +24,7 @@ from docling_core.transforms.serializer.markdown import (
 )
 
 from ingest.page_provenance import PageResolver
+from ingest.sec_structure import EXTRACTOR_VERSION
 
 CHUNK_MAX_TOKENS = 512
 _REPOSITORY_DIR = Path(__file__).resolve().parents[2]
@@ -34,6 +35,8 @@ _SEC_ITEM_HEADING = re.compile(
     flags=re.IGNORECASE | re.MULTILINE,
 )
 _INDEXABLE_TEXT = re.compile(r"[A-Za-z0-9]")
+_LAYOUT_ARTIFACT_LINE = re.compile(r"(?m)^[ \t]*(?:\\_[ \t]*)+$")
+_EXCESS_BLANK_LINES = re.compile(r"\n{3,}")
 
 
 class PatchedOpenAITokenizer(OpenAITokenizer):
@@ -70,15 +73,17 @@ class ChunkRecord:
     chunk_metadata: dict[str, Any]
 
 
-def load_manifest_markdown_paths() -> dict[str, Path]:
+def load_manifest_markdown_paths(
+    manifest_path: Path = MANIFEST_PATH,
+) -> dict[str, Path]:
     """Return accession-to-Markdown mappings from the normalized manifest."""
-    if not MANIFEST_PATH.is_file():
-        raise FileNotFoundError(f"Missing Markdown manifest: {MANIFEST_PATH}")
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"Missing Markdown manifest: {manifest_path}")
 
-    manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     filings = manifest.get("filings", [])
     if not filings:
-        raise ValueError(f"No filings listed in {MANIFEST_PATH}")
+        raise ValueError(f"No filings listed in {manifest_path}")
 
     paths: dict[str, Path] = {}
     for filing in filings:
@@ -86,7 +91,7 @@ def load_manifest_markdown_paths() -> dict[str, Path]:
         if accession in paths:
             raise ValueError(f"Duplicate accession in {MANIFEST_PATH}: {accession}")
 
-        markdown_path = MARKDOWN_DIR / filing["local_path"]
+        markdown_path = manifest_path.parent / filing["local_path"]
         if not markdown_path.is_file():
             raise FileNotFoundError(f"Missing Markdown file: {markdown_path}")
         paths[accession] = markdown_path
@@ -94,8 +99,10 @@ def load_manifest_markdown_paths() -> dict[str, Path]:
     return paths
 
 
-def markdown_path_for_accession(accession_number: str) -> Path:
-    paths = load_manifest_markdown_paths()
+def markdown_path_for_accession(
+    accession_number: str, manifest_path: Path = MANIFEST_PATH
+) -> Path:
+    paths = load_manifest_markdown_paths(manifest_path)
     try:
         return paths[accession_number]
     except KeyError as exc:
@@ -104,8 +111,10 @@ def markdown_path_for_accession(accession_number: str) -> Path:
         ) from exc
 
 
-def iter_all_markdown_paths() -> Iterator[tuple[str, Path]]:
-    yield from load_manifest_markdown_paths().items()
+def iter_all_markdown_paths(
+    manifest_path: Path = MANIFEST_PATH,
+) -> Iterator[tuple[str, Path]]:
+    yield from load_manifest_markdown_paths(manifest_path).items()
 
 
 def build_tokenizer(max_tokens: int = CHUNK_MAX_TOKENS) -> PatchedOpenAITokenizer:
@@ -157,6 +166,12 @@ def _has_indexable_text(text: str) -> bool:
     return bool(_INDEXABLE_TEXT.search(text))
 
 
+def _clean_extraction_artifacts(text: str) -> str:
+    """Remove empty underlined layout rows emitted by SEC inline-XBRL conversion."""
+    cleaned = _LAYOUT_ARTIFACT_LINE.sub("", text)
+    return _EXCESS_BLANK_LINES.sub("\n\n", cleaned).strip()
+
+
 def _split_oversized_context(
     contextualized: str,
     raw_text: str,
@@ -204,24 +219,25 @@ def chunk_document(
     document = convert_markdown_to_document(markdown_path)
     chunker = build_hybrid_chunker(max_tokens=max_tokens)
     records: list[ChunkRecord] = []
-    current_section: str | None = None
+    current_section: str | None = "Filing cover and table of contents"
     page_resolver = PageResolver.from_markdown(markdown_path)
 
     for chunk in chunker.chunk(dl_doc=document):
         if max_chunks is not None and len(records) >= max_chunks:
             break
 
-        if not _has_indexable_text(chunk.text):
+        raw_text = _clean_extraction_artifacts(chunk.text)
+        if not _has_indexable_text(raw_text):
             continue
 
-        contextualized = chunker.contextualize(chunk=chunk).strip()
+        contextualized = _clean_extraction_artifacts(chunker.contextualize(chunk=chunk))
         if not contextualized:
             continue
 
         headings = list(getattr(chunk.meta, "headings", None) or [])
         current_section = (
             _section_from_headings(headings)
-            or _section_from_sec_item(chunk.text)
+            or _section_from_sec_item(raw_text)
             or current_section
         )
         token_count = chunker.tokenizer.count_tokens(contextualized)
@@ -245,22 +261,35 @@ def chunk_document(
                 raise ValueError(
                     f"Fallback emitted a {token_count}-token chunk; limit is {max_tokens}"
                 )
+            provenance = (
+                page_resolver.provenance_for_text(chunk.text)
+                if page_resolver
+                else None
+            )
             records.append(
                 ChunkRecord(
                     chunk_index=len(records),
                     text=text,
-                    page=(
-                        page_resolver.page_for_text(chunk.text)
-                        if page_resolver
-                        else None
-                    ),
+                    page=provenance.page if provenance else None,
                     section=current_section,
                     token_count=token_count,
                     chunk_metadata={
                         **filing_metadata,
                         "source_path": _relative_source_path(markdown_path),
                         "headings": headings,
-                        "raw_text": chunk.text,
+                        "section_path": current_section,
+                        "canonical_item": (
+                            current_section.split(" > ")[-1]
+                            if current_section and "Item " in current_section
+                            else None
+                        ),
+                        "source_anchor": provenance.source_anchor if provenance else None,
+                        "provenance_kind": provenance.kind if provenance else "section",
+                        "extraction_confidence": (
+                            "canonical" if current_section and "Item " in current_section else "inferred"
+                        ),
+                        "extractor_version": EXTRACTOR_VERSION,
+                        "raw_text": raw_text,
                         "chunker": "hybrid",
                         "fallback_split": len(texts) > 1,
                         "chunk_max_tokens": max_tokens,

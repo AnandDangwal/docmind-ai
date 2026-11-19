@@ -1,7 +1,11 @@
 from pathlib import Path
 from uuid import UUID
 
+import httpx
+from google.genai.types import HttpRetryOptions
 from pydantic_ai import Agent, ModelRetry, NativeOutput, RunContext
+from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
 from pydantic_ai.providers.google import GoogleProvider
 
@@ -11,10 +15,34 @@ from app.config import Settings
 from app.grounding.validator import (
     GroundingError,
     normalize_citation_markers,
+    normalize_markdown_line_breaks,
     safe_status_answer,
     validate_answer,
 )
 from app.retrieval.models import Chunk, RetrievalFilters
+
+_RETRYABLE_MODEL_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
+
+
+def _retry_on_transient_model_error(exc: Exception) -> bool:
+    if isinstance(exc, ModelHTTPError):
+        return exc.status_code in _RETRYABLE_MODEL_STATUS_CODES
+    return isinstance(exc, httpx.TransportError)
+
+
+def _google_model(name: str, settings: Settings, *, attempts: int) -> GoogleModel:
+    return GoogleModel(
+        name,
+        provider=GoogleProvider(
+            api_key=settings.gemini_api_key.get_secret_value(),
+            retry_options=HttpRetryOptions(
+                attempts=attempts,
+                initial_delay=1,
+                max_delay=3,
+                http_status_codes=sorted(_RETRYABLE_MODEL_STATUS_CODES),
+            ),
+        ),
+    )
 
 
 async def search_filings(
@@ -50,11 +78,11 @@ async def read_surrounding_chunks(
     before: int = 1,
     after: int = 1,
 ) -> list[Chunk]:
-    """Read up to three neighboring chunks on either side of an exposed chunk."""
+    """Read up to eight neighboring chunks on either side of an exposed chunk."""
     ctx.deps.count_tool()
     ctx.deps.require_chunk(chunk_id)
-    if not 0 <= before <= 3 or not 0 <= after <= 3:
-        raise ModelRetry("before and after must be between 0 and 3")
+    if not 0 <= before <= 8 or not 0 <= after <= 8:
+        raise ModelRetry("before and after must be between 0 and 8")
     chunks = await ctx.deps.retriever.read_surrounding_chunks(
         chunk_id, before=before, after=after
     )
@@ -62,9 +90,10 @@ async def read_surrounding_chunks(
 
 
 def build_agent(settings: Settings) -> Agent[DocumentAgentDeps, GroundedAnswer]:
-    model = GoogleModel(
-        settings.gemini_chat_model,
-        provider=GoogleProvider(api_key=settings.gemini_api_key.get_secret_value()),
+    model = FallbackModel(
+        _google_model(settings.gemini_chat_model, settings, attempts=1),
+        _google_model(settings.gemini_fallback_chat_model, settings, attempts=2),
+        fallback_on=_retry_on_transient_model_error,
     )
     agent = Agent(
         model,
@@ -79,8 +108,8 @@ def build_agent(settings: Settings) -> Agent[DocumentAgentDeps, GroundedAnswer]:
                 if settings.gemini_reasoning_effort == "none"
                 else settings.gemini_reasoning_effort
             ),
-            timeout=90,
-            max_tokens=8000,
+            timeout=60,
+            max_tokens=16_384,
         ),
         retries={"tools": 1, "output": 2},
         tools=[search_filings, read_chunk, read_surrounding_chunks],
@@ -91,6 +120,7 @@ def build_agent(settings: Settings) -> Agent[DocumentAgentDeps, GroundedAnswer]:
         ctx: RunContext[DocumentAgentDeps], output: GroundedAnswer
     ) -> GroundedAnswer:
         try:
+            output = normalize_markdown_line_breaks(output)
             output = normalize_citation_markers(output)
             if output.status != "answered" and output.citations:
                 raise GroundingError(

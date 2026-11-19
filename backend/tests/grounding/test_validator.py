@@ -9,6 +9,7 @@ from app.grounding.validator import (
     GroundingError,
     citation_parts,
     normalize_citation_markers,
+    normalize_markdown_line_breaks,
     safe_status_answer,
     validate_answer,
 )
@@ -48,6 +49,23 @@ def test_grouped_citation_markers_are_normalized_before_validation():
     validate_answer(normalized, {UUID(int=1): _chunk(1), UUID(int=2): _chunk(2)})
 
 
+def test_html_line_breaks_are_normalized_to_markdown_lines():
+    output = answer(
+        "# Apple 2024 Financial Breakdown<br>"
+        "* Revenue was $391 billion. [C1]<BR />"
+        "* Net income was $94 billion. [C1]"
+    )
+
+    normalized = normalize_markdown_line_breaks(output)
+
+    assert normalized.answer == (
+        "# Apple 2024 Financial Breakdown\n"
+        "* Revenue was $391 billion. [C1]\n"
+        "* Net income was $94 billion. [C1]"
+    )
+    validate_answer(normalized, {UUID(int=1): _chunk(1)})
+
+
 @pytest.mark.parametrize(
     "output",
     [
@@ -55,7 +73,6 @@ def test_grouped_citation_markers_are_normalized_before_validation():
         answer("Unsupported."),
         answer("Claim. [C2]"),
         answer("Claim. [C1]\n\nUncited claim."),
-        answer("# Uncited factual heading\nClaim. [C1]"),
         answer("Claim. [C1] [C01]"),
         answer(ids=[Citation(citation_id="C1", chunk_id=UUID(int=2))]),
         answer(ids=[Citation(citation_id="C1", chunk_id=UUID(int=1))] * 2),
@@ -81,3 +98,23 @@ def test_abstentions_need_no_citations(status):
 def test_uncited_facts_cannot_hide_in_non_answer_status(status):
     with pytest.raises(GroundingError, match="server-approved wording"):
         validate_answer(answer("Apple revenue was $999 billion.", [], status), {})
+
+
+def test_markdown_headings_and_table_headers_do_not_need_citations():
+    output = answer(
+        "# Segment comparison\n\n"
+        "| Company | Profit | Evidence |\n"
+        "| --- | ---: | --- |\n"
+        "| Apple | $1 million | [C1] |"
+    )
+
+    validate_answer(output, {UUID(int=1): _chunk(1)})
+
+
+def test_markdown_table_data_rows_still_need_citations():
+    output = answer(
+        "| Company | Profit |\n| --- | ---: |\n| Apple | $1 million |\n\nSummary. [C1]"
+    )
+
+    with pytest.raises(GroundingError, match="Every substantive"):
+        validate_answer(output, {UUID(int=1): _chunk(1)})

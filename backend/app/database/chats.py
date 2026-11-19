@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,6 +43,14 @@ async def get_thread(session: AsyncSession, *, thread_id: UUID) -> ChatThread | 
     return await session.get(ChatThread, thread_id)
 
 
+async def delete_thread(session: AsyncSession, *, thread_id: UUID) -> None:
+    await session.execute(delete(ChatThread).where(ChatThread.id == thread_id))
+
+
+async def get_message(session: AsyncSession, *, message_id: UUID) -> ChatMessage | None:
+    return await session.get(ChatMessage, message_id)
+
+
 async def list_messages_for_thread(
     session: AsyncSession, *, thread_id: UUID
 ) -> list[ChatMessage]:
@@ -68,6 +76,41 @@ async def create_message(
     session.add(message)
     await session.flush()
     return message
+
+
+async def replace_user_turn(
+    session: AsyncSession,
+    *,
+    thread_id: UUID,
+    message_id: UUID,
+    parts: list[dict],
+    title: str,
+) -> list[ChatMessage]:
+    messages = await list_messages_for_thread(session, thread_id=thread_id)
+    target_index = next(
+        (index for index, message in enumerate(messages) if message.id == message_id),
+        None,
+    )
+    if target_index is None:
+        raise ValueError("Replacement message is not in the thread")
+
+    target = messages[target_index]
+    if target.role != MessageRole.user:
+        raise ValueError("Only user messages can be replaced")
+
+    history = messages[:target_index]
+    later_ids = [message.id for message in messages[target_index + 1 :]]
+    if later_ids:
+        await session.execute(delete(ChatMessage).where(ChatMessage.id.in_(later_ids)))
+
+    target.parts = parts
+    if not any(message.role == MessageRole.user for message in history):
+        thread = await get_thread(session, thread_id=thread_id)
+        if thread is not None:
+            thread.title = title[:80]
+
+    await session.flush()
+    return history
 
 
 async def create_citations(

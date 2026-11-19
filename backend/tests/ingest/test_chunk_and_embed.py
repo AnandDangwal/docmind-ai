@@ -141,6 +141,7 @@ def test_smoke_test_embeds_and_writes_exactly_one_chunk(monkeypatch) -> None:
         _document(),
         Path("filing.md"),
         max_chunks=1,
+        ingestion_run_id=uuid4(),
     )
 
     assert count == 1
@@ -162,13 +163,14 @@ def test_existing_document_is_skipped_before_chunking(monkeypatch) -> None:
         session,
         _document(),
         Path("filing.md"),
+        ingestion_run_id=uuid4(),
     )
 
     assert count == 0
     assert session.committed is False
 
 
-def test_force_prepares_embedding_before_deleting(monkeypatch) -> None:
+def test_generation_append_embeds_without_deleting(monkeypatch) -> None:
     session = FakeSession()
     events: list[str] = []
     monkeypatch.setattr(
@@ -181,33 +183,22 @@ def test_force_prepares_embedding_before_deleting(monkeypatch) -> None:
         "embed_texts",
         lambda texts: events.append("embed") or [[0.1]],
     )
-    monkeypatch.setattr(
-        chunk_and_embed,
-        "_delete_chunks",
-        lambda *args: events.append("delete"),
-    )
-
     chunk_and_embed.ingest_document(
         session,
         _document(),
         Path("filing.md"),
-        force=True,
+        ingestion_run_id=uuid4(),
+        skip_existing=False,
     )
 
-    assert events == ["embed", "delete"]
+    assert events == ["embed"]
     assert session.committed is True
 
 
-def test_embedding_failure_preserves_existing_chunks(monkeypatch) -> None:
+def test_embedding_failure_writes_no_generation_chunks(monkeypatch) -> None:
     session = FakeSession()
-    deleted = False
-
     def fail_embedding(texts):
         raise RuntimeError("OpenAI failure")
-
-    def track_delete(*args):
-        nonlocal deleted
-        deleted = True
 
     monkeypatch.setattr(
         chunk_and_embed,
@@ -215,21 +206,20 @@ def test_embedding_failure_preserves_existing_chunks(monkeypatch) -> None:
         lambda *args, **kwargs: [_record()],
     )
     monkeypatch.setattr(chunk_and_embed, "embed_texts", fail_embedding)
-    monkeypatch.setattr(chunk_and_embed, "_delete_chunks", track_delete)
-
     with pytest.raises(RuntimeError, match="OpenAI failure"):
         chunk_and_embed.ingest_document(
             session,
             _document(),
             Path("filing.md"),
-            force=True,
+            ingestion_run_id=uuid4(),
+            skip_existing=False,
         )
 
-    assert deleted is False
+    assert session.added == []
     assert session.committed is False
 
 
-def test_database_failure_rolls_back_force_replacement(monkeypatch) -> None:
+def test_database_failure_rolls_back_generation_append(monkeypatch) -> None:
     session = FakeSession(fail_commit=True)
     monkeypatch.setattr(
         chunk_and_embed,
@@ -237,14 +227,13 @@ def test_database_failure_rolls_back_force_replacement(monkeypatch) -> None:
         lambda *args, **kwargs: [_record()],
     )
     monkeypatch.setattr(chunk_and_embed, "embed_texts", lambda texts: [[0.1]])
-    monkeypatch.setattr(chunk_and_embed, "_delete_chunks", lambda *args: None)
-
     with pytest.raises(RuntimeError, match="database failure"):
         chunk_and_embed.ingest_document(
             session,
             _document(),
             Path("filing.md"),
-            force=True,
+            ingestion_run_id=uuid4(),
+            skip_existing=False,
         )
 
     assert session.rolled_back is True

@@ -6,6 +6,7 @@ from typing import Literal
 from uuid import UUID
 
 RetrievalSource = Literal["semantic", "lexical"]
+CHUNK_CONTEXT_OVERHEAD_TOKENS = 96
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,6 +14,7 @@ class RetrievalFilters:
     tickers: tuple[str, ...] = ()
     fiscal_years: tuple[int, ...] = ()
     filing_types: tuple[str, ...] = ()
+    latest_only: bool = False
 
     def __post_init__(self) -> None:
         tickers = tuple(
@@ -51,6 +53,9 @@ class Chunk:
     fiscal_year: int
     accession_number: str
     source_url: str
+    section_path: str | None = None
+    source_anchor: str | None = None
+    provenance_kind: Literal["page", "anchor", "section"] = "section"
 
 
 @dataclass(frozen=True, slots=True)

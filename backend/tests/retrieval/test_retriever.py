@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import date
 from uuid import UUID
 
@@ -136,12 +137,54 @@ def test_search_degrades_to_one_branch(monkeypatch: pytest.MonkeyPatch) -> None:
     assert [hit.source for hit in passages[0].source_hits] == ["lexical"]
 
 
+def test_balanced_search_reuses_one_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
+    embedding_calls = 0
+
+    async def embed(query: str) -> list[float]:
+        nonlocal embedding_calls
+        embedding_calls += 1
+        return [0.0] * EMBEDDING_DIMENSIONS
+
+    async def semantic(session, vector, **kwargs):
+        ticker = kwargs["filters"].tickers[0]
+        value = 1 if ticker == "AAPL" else 2
+        return [_hit(value, "semantic", 1)]
+
+    async def lexical(session, query, **kwargs):
+        return []
+
+    async def neighbors(session, anchors, **kwargs):
+        return {anchor: () for anchor in anchors}
+
+    monkeypatch.setattr("app.retrieval.retriever.read_neighbor_chunks", neighbors)
+    retriever = DocumentRetriever(
+        _session_factory,
+        embed,
+        semantic_search_fn=semantic,
+        full_text_search_fn=lexical,
+    )
+
+    passages = asyncio.run(
+        retriever.search_filings_balanced(
+            "compare profit",
+            (
+                RetrievalFilters(tickers=("AAPL",)),
+                RetrievalFilters(tickers=("AMZN",)),
+            ),
+            top_k_per_filter=1,
+        )
+    )
+
+    assert embedding_calls == 1
+    assert [passage.anchor.id for passage in passages] == [UUID(int=1), UUID(int=2)]
+
+
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
         ({"top_k": 0}, "top_k"),
         ({"top_k": 10, "candidate_k": 5}, "candidate_k"),
-        ({"neighbor_window": 4}, "neighbor_window"),
+        ({"neighbor_window": 9}, "neighbor_window"),
     ],
 )
 def test_search_validates_bounds(kwargs: dict[str, int], message: str) -> None:
@@ -191,3 +234,67 @@ def test_read_methods_delegate_to_bounded_queries(
     assert chunk == _chunk(5, chunk_index=5)
     assert [neighbor.chunk_index for neighbor in neighbors] == [4, 6]
     assert missing == ()
+
+
+def test_complete_filing_loader_enforces_true_context_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def available(session, filters):
+        assert filters.tickers == ("AAPL",)
+        return [_chunk(1), _chunk(2), _chunk(3)]
+
+    monkeypatch.setattr("app.retrieval.retriever.list_active_chunks", available)
+    retriever = DocumentRetriever(_session_factory, lambda query: None)  # type: ignore[arg-type]
+
+    chunks, complete = asyncio.run(
+        retriever.load_relevant_filings(
+            RetrievalFilters(tickers=("AAPL",)), max_tokens=250
+        )
+    )
+
+    assert [chunk.id for chunk in chunks] == [UUID(int=1), UUID(int=2)]
+    assert complete is False
+
+
+def test_complete_filing_loader_accepts_latest_scope_without_company(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def available(session, filters):
+        assert filters.latest_only is True
+        return [_chunk(1)]
+
+    monkeypatch.setattr("app.retrieval.retriever.list_active_chunks", available)
+    retriever = DocumentRetriever(
+        _session_factory,
+        lambda query: None,  # type: ignore[arg-type]
+    )
+
+    chunks, complete = asyncio.run(
+        retriever.load_relevant_filings(RetrievalFilters(latest_only=True))
+    )
+
+    assert chunks == [_chunk(1)]
+    assert complete is True
+
+
+def test_filing_groups_preserve_complete_document_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def available(session, filters):
+        return [
+            _chunk(1),
+            _chunk(2),
+            replace(_chunk(3), document_id=UUID(int=200), ticker="MSFT"),
+        ]
+
+    monkeypatch.setattr("app.retrieval.retriever.list_active_chunks", available)
+    retriever = DocumentRetriever(_session_factory, lambda query: None)  # type: ignore[arg-type]
+
+    groups = asyncio.run(
+        retriever.load_relevant_filing_groups(RetrievalFilters(fiscal_years=(2023,)))
+    )
+
+    assert [[chunk.id for chunk in group] for group in groups] == [
+        [UUID(int=1), UUID(int=2)],
+        [UUID(int=3)],
+    ]

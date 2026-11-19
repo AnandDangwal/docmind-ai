@@ -1,9 +1,7 @@
 import { createClient } from "@supabase/supabase-js"
+
 import { env } from "@/lib/env"
 
-// Single browser client (anon key only). Owns the auth session: persisted in
-// localStorage and refreshed automatically, so everything else reads the
-// current token from here instead of passing it around.
 export const supabase = createClient(env.supabaseUrl, env.supabaseAnonKey, {
   auth: {
     persistSession: true,
@@ -11,3 +9,17 @@ export const supabase = createClient(env.supabaseUrl, env.supabaseAnonKey, {
     detectSessionInUrl: true,
   },
 })
+
+export async function getAccessToken(): Promise<string> {
+  const { data, error } = await supabase.auth.getSession()
+
+  if (error) {
+    throw error
+  }
+
+  if (!data.session?.access_token) {
+    throw new Error("Your session has expired. Sign in again to continue.")
+  }
+
+  return data.session.access_token
+}

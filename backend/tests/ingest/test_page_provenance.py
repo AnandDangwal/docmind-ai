@@ -48,3 +48,54 @@ def test_missing_branded_page_markers_returns_none(tmp_path: Path, monkeypatch) 
     monkeypatch.setattr(page_provenance, "_DOWNLOAD_DIR", download_dir)
 
     assert page_provenance.PageResolver.from_markdown(markdown_path) is None
+
+
+def test_generic_monotonic_page_markers_are_verified(tmp_path: Path, monkeypatch) -> None:
+    markdown_dir = tmp_path / "data" / "markdown"
+    download_dir = tmp_path / "data" / "downloads"
+    markdown_path = markdown_dir / "2024" / "example.md"
+    html_path = download_dir / "2024" / "example.htm"
+    markdown_path.parent.mkdir(parents=True)
+    html_path.parent.mkdir(parents=True)
+    markdown_path.write_text("placeholder", encoding="utf-8")
+    html_path.write_text(
+        "<body>First unique operating revenue sentence with enough matching words. "
+        "2024 Form 10-K 1 Second unique cash flow sentence with enough matching words. "
+        "2024 Form 10-K 2</body>",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(page_provenance, "_REPOSITORY_DIR", tmp_path)
+    monkeypatch.setattr(page_provenance, "_DOWNLOAD_DIR", download_dir)
+
+    resolver = page_provenance.PageResolver.from_markdown(markdown_path)
+
+    assert resolver is not None
+    assert resolver.page_for_text(
+        "First unique operating revenue sentence with enough matching words"
+    ) == 1
+
+
+def test_stable_html_anchor_is_used_without_a_page(tmp_path: Path, monkeypatch) -> None:
+    markdown_dir = tmp_path / "data" / "markdown"
+    download_dir = tmp_path / "data" / "downloads"
+    markdown_path = markdown_dir / "2024" / "example.md"
+    html_path = download_dir / "2024" / "example.htm"
+    markdown_path.parent.mkdir(parents=True)
+    html_path.parent.mkdir(parents=True)
+    markdown_path.write_text("placeholder", encoding="utf-8")
+    html_path.write_text(
+        '<body><div id="management-discussion">Unique management discussion '
+        "contains revenue margin demand and operating income details.</div></body>",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(page_provenance, "_REPOSITORY_DIR", tmp_path)
+    monkeypatch.setattr(page_provenance, "_DOWNLOAD_DIR", download_dir)
+
+    resolver = page_provenance.PageResolver.from_markdown(markdown_path)
+    provenance = resolver.provenance_for_text(
+        "Unique management discussion contains revenue margin demand and operating income details"
+    )
+
+    assert provenance.page is None
+    assert provenance.source_anchor == "management-discussion"
+    assert provenance.kind == "anchor"
